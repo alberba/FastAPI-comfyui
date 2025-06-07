@@ -28,21 +28,21 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # Almacenar las conexiones WebSocket activas
 active_connections = {}
 
-@app.websocket("/ws/{client_id}")
-async def websocket_endpoint(websocket: WebSocket, client_id: str):
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket, clientId: str):
     await websocket.accept()
-    active_connections[client_id] = websocket
+    active_connections[clientId] = websocket
     try:
         while True:
             # Mantener la conexión viva
             await websocket.receive_text()
     except:
-        if client_id in active_connections:
-            del active_connections[client_id]
+        if clientId in active_connections:
+            del active_connections[clientId]
 
-async def send_progress(client_id: str, progress_data: dict):
-    if client_id in active_connections:
-        await active_connections[client_id].send_json(progress_data)
+async def send_progress(clientId: str, progress_data: dict):
+    if clientId in active_connections:
+        await active_connections[clientId].send_json(progress_data)
 
 class GenerationRequest(BaseModel):
     prompt: str
