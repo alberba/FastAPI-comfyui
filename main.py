@@ -366,95 +366,175 @@ async def generate_simple_image(prompt: str):
         # Crear workflow simple para ComfyUI
         workflow = {
             "prompt": {
-                "5": {
-                    "inputs": {
-                        "seed": random_seed,  # Usar el seed aleatorio
-                        "steps": 25,
-                        "cfg": 1,
-                        "sampler_name": "euler",
-                        "scheduler": "beta",
-                        "denoise": 1,
-                        "model": ["18", 0],
-                        "positive": ["29", 0],
-                        "negative": ["20", 0],
-                        "latent_image": ["6", 0]
-                    },
-                    "class_type": "KSampler"
-                },
-                "6": {
-                    "inputs": {
-                        "width": 1024,
-                        "height": 1024,
-                        "batch_size": 1
-                    },
-                    "class_type": "EmptyLatentImage"
-                },
-                "7": {
-                    "inputs": {
-                        "samples": ["5", 0],
-                        "vae": ["9", 0]
-                    },
-                    "class_type": "VAEDecode"
-                },
-                "9": {
-                    "inputs": {
-                        "vae_name": "ae.safetensors"
-                    },
-                    "class_type": "VAELoader"
-                },
-                "11": {
-                    "inputs": {
-                        "clip_name1": "t5xxl_fp8_e4m3fn.safetensors",
-                        "clip_name2": "clip_l.safetensors",
-                        "type": "flux",
-                        "device": "default"
-                    },
-                    "class_type": "DualCLIPLoader"
-                },
-                "14": {
-                    "inputs": {
-                        "text": prompt,
-                        "clip": ["11", 0]
-                    },
-                    "class_type": "CLIPTextEncode"
-                },
-                "15": {
-                    "inputs": {
-                        "unet_name": "flux1-dev.safetensors",
-                        "weight_dtype": "fp8_e4m3fn"
-                    },
-                    "class_type": "UNETLoader"
-                },
-                "18": {
-                    "inputs": {
-                        "lora_name": "mascaroPerfeccionadoFlux.safetensors",
-                        "strength_model": 1.0000000000000002,
-                        "model": ["15", 0]
-                    },
-                    "class_type": "LoraLoaderModelOnly"
-                },
-                "20": {
-                    "inputs": {
-                        "text": "",
-                        "clip": ["11", 0]
-                    },
-                    "class_type": "CLIPTextEncode"
-                },
-                "27": {
-                    "inputs": {
-                        "filename_prefix": "LoRA_Flux_no_inpaint",
-                        "images": ["7", 0]
-                    },
-                    "class_type": "SaveImage"
-                },
-                "29": {
-                    "inputs": {
-                        "guidance": 3.5,
-                        "conditioning": ["14", 0]
-                    },
-                    "class_type": "FluxGuidance"
-                }
-            }
+  "5": {
+    "inputs": {
+      "seed": random_seed,
+      "steps": 25,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "denoise": 1,
+      "model": [
+        "35",
+        0
+      ],
+      "positive": [
+        "29",
+        0
+      ],
+      "negative": [
+        "20",
+        0
+      ],
+      "latent_image": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "6": {
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Empty Latent Image"
+    }
+  },
+  "7": {
+    "inputs": {
+      "samples": [
+        "5",
+        0
+      ],
+      "vae": [
+        "9",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "9": {
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "11": {
+    "inputs": {
+      "clip_name1": "t5xxl_fp8_e4m3fn.safetensors",
+      "clip_name2": "clip_l.safetensors",
+      "type": "flux",
+      "device": "default"
+    },
+    "class_type": "DualCLIPLoader",
+    "_meta": {
+      "title": "DualCLIPLoader"
+    }
+  },
+  "14": {
+    "inputs": {
+      "text": "A photorealistic portrait of a man named Mqlmscr smiling in the park",
+      "clip": [
+        "11",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Positive Prompt"
+    }
+  },
+  "15": {
+    "inputs": {
+      "unet_name": "flux1-dev.safetensors",
+      "weight_dtype": "fp8_e4m3fn"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "18": {
+    "inputs": {
+      "lora_name": "mascaroPerfeccionadoFlux.safetensors",
+      "strength_model": 1.0000000000000002,
+      "model": [
+        "15",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "LoraLoaderModelOnly"
+    }
+  },
+  "20": {
+    "inputs": {
+      "text": "",
+      "clip": [
+        "11",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Negative Prompt"
+    }
+  },
+  "27": {
+    "inputs": {
+      "filename_prefix": "LoRA_Flux_no_inpaint",
+      "images": [
+        "7",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "29": {
+    "inputs": {
+      "guidance": 3.5,
+      "conditioning": [
+        "14",
+        0
+      ]
+    },
+    "class_type": "FluxGuidance",
+    "_meta": {
+      "title": "FluxGuidance"
+    }
+  },
+  "35": {
+    "inputs": {
+      "lora_name": "aidmaImageUprader-FLUX-v0.3.safetensors",
+      "strength_model": 1.0000000000000002,
+      "model": [
+        "18",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "LoraLoaderModelOnly"
+    }
+  }
+}
         }
 
         # Enviar a ComfyUI
