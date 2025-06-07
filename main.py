@@ -7,6 +7,7 @@ import os
 from typing import Optional
 from pydantic import BaseModel
 import asyncio
+import random
 
 app = FastAPI(title="ComfyUI Image Generation API")
 
@@ -359,12 +360,15 @@ async def generate_image(
 @app.get("/api/generate-simple")
 async def generate_simple_image(prompt: str):
     try:
+        # Generar un seed aleatorio
+        random_seed = random.randint(0, 2**32 - 1)
+
         # Crear workflow simple para ComfyUI
         workflow = {
             "prompt": {
                 "5": {
                     "inputs": {
-                        "seed": 121019983053432,
+                        "seed": random_seed,  # Usar el seed aleatorio
                         "steps": 25,
                         "cfg": 1,
                         "sampler_name": "euler",
