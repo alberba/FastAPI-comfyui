@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import requests
@@ -24,6 +24,25 @@ app.add_middleware(
 COMFYUI_SERVER = "http://127.0.0.1:8188"
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# Almacenar las conexiones WebSocket activas
+active_connections = {}
+
+@app.websocket("/ws/{client_id}")
+async def websocket_endpoint(websocket: WebSocket, client_id: str):
+    await websocket.accept()
+    active_connections[client_id] = websocket
+    try:
+        while True:
+            # Mantener la conexión viva
+            await websocket.receive_text()
+    except:
+        if client_id in active_connections:
+            del active_connections[client_id]
+
+async def send_progress(client_id: str, progress_data: dict):
+    if client_id in active_connections:
+        await active_connections[client_id].send_json(progress_data)
 
 class GenerationRequest(BaseModel):
     prompt: str
@@ -358,7 +377,7 @@ async def generate_image(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/generate-simple")
-async def generate_simple_image(prompt: str):
+async def generate_simple_image(prompt: str, client_id: Optional[str] = None):
     try:
         # Generar un seed aleatorio
         random_seed = random.randint(0, 2**32 - 1)
@@ -546,13 +565,25 @@ async def generate_simple_image(prompt: str):
         
         prompt_id = response.json()["prompt_id"]
         
-        # Esperar a que la generación termine
-        while True:
-            history = requests.get(f"{COMFYUI_SERVER}/api/history/{prompt_id}")
-            if history.status_code == 200 and history.json():
-                break
-            await asyncio.sleep(1)
-        
+        # Si hay un client_id, monitorear el progreso
+        if client_id:
+            while True:
+                progress = requests.get(f"{COMFYUI_SERVER}/api/progress")
+                if progress.status_code == 200:
+                    progress_data = progress.json()
+                    await send_progress(client_id, {
+                        "status": "in_progress",
+                        "progress": progress_data.get("value", 0),
+                        "eta": progress_data.get("eta", 0)
+                    })
+
+                # Verificar si la generación terminó
+                history = requests.get(f"{COMFYUI_SERVER}/api/history/{prompt_id}")
+                if history.status_code == 200 and history.json():
+                    break
+                
+                await asyncio.sleep(1)
+
         # Obtener la imagen generada
         history_data = history.json()
         if prompt_id in history_data:
@@ -561,7 +592,7 @@ async def generate_simple_image(prompt: str):
                 images = outputs["27"]["images"]
                 if images:
                     image_data = images[0]
-                    return {
+                    result = {
                         "status": "completed",
                         "image": {
                             "filename": image_data["filename"],
@@ -570,10 +601,19 @@ async def generate_simple_image(prompt: str):
                             "url": f"{COMFYUI_SERVER}/view?filename={image_data['filename']}&type={image_data['type']}&subfolder={image_data.get('subfolder', '')}"
                         }
                     }
+                    if client_id:
+                        await send_progress(client_id, result)
+                    return result
         
-        return {"status": "error", "message": "No se pudo obtener la imagen generada"}
+        error_result = {"status": "error", "message": "No se pudo obtener la imagen generada"}
+        if client_id:
+            await send_progress(client_id, error_result)
+        return error_result
 
     except Exception as e:
+        error_result = {"status": "error", "message": str(e)}
+        if client_id:
+            await send_progress(client_id, error_result)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/progress/{prompt_id}")
