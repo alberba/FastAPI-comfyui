@@ -6,6 +6,7 @@ import json
 import os
 from typing import Optional
 from pydantic import BaseModel
+import asyncio
 
 app = FastAPI(title="ComfyUI Image Generation API")
 
@@ -355,169 +356,101 @@ async def generate_image(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/generate-simple")
-async def generate_simple_image(
-    prompt: str = Form(...),
-):
+@app.get("/api/generate-simple")
+async def generate_simple_image(prompt: str):
     try:
         # Crear workflow simple para ComfyUI
         workflow = {
             "prompt": {
-  "5": {
-    "inputs": {
-      "seed": 121019983053432,
-      "steps": 25,
-      "cfg": 1,
-      "sampler_name": "euler",
-      "scheduler": "beta",
-      "denoise": 1,
-      "model": [
-        "18",
-        0
-      ],
-      "positive": [
-        "29",
-        0
-      ],
-      "negative": [
-        "20",
-        0
-      ],
-      "latent_image": [
-        "6",
-        0
-      ]
-    },
-    "class_type": "KSampler",
-    "_meta": {
-      "title": "KSampler"
-    }
-  },
-  "6": {
-    "inputs": {
-      "width": 1024,
-      "height": 1024,
-      "batch_size": 1
-    },
-    "class_type": "EmptyLatentImage",
-    "_meta": {
-      "title": "Empty Latent Image"
-    }
-  },
-  "7": {
-    "inputs": {
-      "samples": [
-        "5",
-        0
-      ],
-      "vae": [
-        "9",
-        0
-      ]
-    },
-    "class_type": "VAEDecode",
-    "_meta": {
-      "title": "VAE Decode"
-    }
-  },
-  "9": {
-    "inputs": {
-      "vae_name": "ae.safetensors"
-    },
-    "class_type": "VAELoader",
-    "_meta": {
-      "title": "Load VAE"
-    }
-  },
-  "11": {
-    "inputs": {
-      "clip_name1": "t5xxl_fp8_e4m3fn.safetensors",
-      "clip_name2": "clip_l.safetensors",
-      "type": "flux",
-      "device": "default"
-    },
-    "class_type": "DualCLIPLoader",
-    "_meta": {
-      "title": "DualCLIPLoader"
-    }
-  },
-  "14": {
-    "inputs": {
-      "text": prompt,
-      "clip": [
-        "11",
-        0
-      ]
-    },
-    "class_type": "CLIPTextEncode",
-    "_meta": {
-      "title": "Positive Prompt"
-    }
-  },
-  "15": {
-    "inputs": {
-      "unet_name": "flux1-dev.safetensors",
-      "weight_dtype": "fp8_e4m3fn"
-    },
-    "class_type": "UNETLoader",
-    "_meta": {
-      "title": "Load Diffusion Model"
-    }
-  },
-  "18": {
-    "inputs": {
-      "lora_name": "Mascaro\\mascaroPerfeccionadoFlux.safetensors",
-      "strength_model": 1.0000000000000002,
-      "model": [
-        "15",
-        0
-      ]
-    },
-    "class_type": "LoraLoaderModelOnly",
-    "_meta": {
-      "title": "LoraLoaderModelOnly"
-    }
-  },
-  "20": {
-    "inputs": {
-      "text": "",
-      "clip": [
-        "11",
-        0
-      ]
-    },
-    "class_type": "CLIPTextEncode",
-    "_meta": {
-      "title": "Negative Prompt"
-    }
-  },
-  "27": {
-    "inputs": {
-      "filename_prefix": "LoRA_Flux_no_inpaint",
-      "images": [
-        "7",
-        0
-      ]
-    },
-    "class_type": "SaveImage",
-    "_meta": {
-      "title": "Save Image"
-    }
-  },
-  "29": {
-    "inputs": {
-      "guidance": 3.5,
-      "conditioning": [
-        "14",
-        0
-      ]
-    },
-    "class_type": "FluxGuidance",
-    "_meta": {
-      "title": "FluxGuidance"
-    }
-  }
-}
+                "5": {
+                    "inputs": {
+                        "seed": 121019983053432,
+                        "steps": 25,
+                        "cfg": 1,
+                        "sampler_name": "euler",
+                        "scheduler": "beta",
+                        "denoise": 1,
+                        "model": ["18", 0],
+                        "positive": ["29", 0],
+                        "negative": ["20", 0],
+                        "latent_image": ["6", 0]
+                    },
+                    "class_type": "KSampler"
+                },
+                "6": {
+                    "inputs": {
+                        "width": 1024,
+                        "height": 1024,
+                        "batch_size": 1
+                    },
+                    "class_type": "EmptyLatentImage"
+                },
+                "7": {
+                    "inputs": {
+                        "samples": ["5", 0],
+                        "vae": ["9", 0]
+                    },
+                    "class_type": "VAEDecode"
+                },
+                "9": {
+                    "inputs": {
+                        "vae_name": "ae.safetensors"
+                    },
+                    "class_type": "VAELoader"
+                },
+                "11": {
+                    "inputs": {
+                        "clip_name1": "t5xxl_fp8_e4m3fn.safetensors",
+                        "clip_name2": "clip_l.safetensors",
+                        "type": "flux",
+                        "device": "default"
+                    },
+                    "class_type": "DualCLIPLoader"
+                },
+                "14": {
+                    "inputs": {
+                        "text": prompt,
+                        "clip": ["11", 0]
+                    },
+                    "class_type": "CLIPTextEncode"
+                },
+                "15": {
+                    "inputs": {
+                        "unet_name": "flux1-dev.safetensors",
+                        "weight_dtype": "fp8_e4m3fn"
+                    },
+                    "class_type": "UNETLoader"
+                },
+                "18": {
+                    "inputs": {
+                        "lora_name": "mascaroPerfeccionadoFlux.safetensors",
+                        "strength_model": 1.0000000000000002,
+                        "model": ["15", 0]
+                    },
+                    "class_type": "LoraLoaderModelOnly"
+                },
+                "20": {
+                    "inputs": {
+                        "text": "",
+                        "clip": ["11", 0]
+                    },
+                    "class_type": "CLIPTextEncode"
+                },
+                "27": {
+                    "inputs": {
+                        "filename_prefix": "LoRA_Flux_no_inpaint",
+                        "images": ["7", 0]
+                    },
+                    "class_type": "SaveImage"
+                },
+                "29": {
+                    "inputs": {
+                        "guidance": 3.5,
+                        "conditioning": ["14", 0]
+                    },
+                    "class_type": "FluxGuidance"
+                }
+            }
         }
 
         # Enviar a ComfyUI
@@ -527,7 +460,57 @@ async def generate_simple_image(
         )
         response.raise_for_status()
         
-        return {"message": "Imagen en proceso de generación", "prompt_id": response.json()["prompt_id"]}
+        prompt_id = response.json()["prompt_id"]
+        
+        # Esperar a que la generación termine
+        while True:
+            history = requests.get(f"{COMFYUI_SERVER}/api/history/{prompt_id}")
+            if history.status_code == 200 and history.json():
+                break
+            await asyncio.sleep(1)
+        
+        # Obtener la imagen generada
+        history_data = history.json()
+        if prompt_id in history_data:
+            outputs = history_data[prompt_id]["outputs"]
+            if "27" in outputs:  # ID del nodo SaveImage
+                images = outputs["27"]["images"]
+                if images:
+                    image_data = images[0]
+                    return {
+                        "status": "completed",
+                        "image": {
+                            "filename": image_data["filename"],
+                            "type": image_data["type"],
+                            "subfolder": image_data.get("subfolder", ""),
+                            "url": f"{COMFYUI_SERVER}/view?filename={image_data['filename']}&type={image_data['type']}&subfolder={image_data.get('subfolder', '')}"
+                        }
+                    }
+        
+        return {"status": "error", "message": "No se pudo obtener la imagen generada"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/progress/{prompt_id}")
+async def get_progress(prompt_id: str):
+    try:
+        # Obtener el progreso actual
+        progress = requests.get(f"{COMFYUI_SERVER}/api/progress")
+        if progress.status_code == 200:
+            progress_data = progress.json()
+            return {
+                "status": "in_progress",
+                "progress": progress_data.get("value", 0),
+                "eta": progress_data.get("eta", 0)
+            }
+        
+        # Si no hay progreso, verificar si la generación terminó
+        history = requests.get(f"{COMFYUI_SERVER}/api/history/{prompt_id}")
+        if history.status_code == 200 and history.json():
+            return {"status": "completed"}
+        
+        return {"status": "pending"}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
