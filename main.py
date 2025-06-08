@@ -11,6 +11,7 @@ import random
 import uuid
 import urllib.request
 import urllib.parse
+import websockets
 
 app = FastAPI(title="ComfyUI Image Generation API")
 
@@ -24,7 +25,7 @@ app.add_middleware(
 )
 
 # ComfyUI server configuration
-COMFYUI_SERVER = "http://127.0.0.1:8188"
+COMFYUI_SERVER = "127.0.0.1:8188"
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -37,7 +38,7 @@ def queue_prompt(prompt):
     print(f"Sending to ComfyUI: {data.decode()}")
     
     req = urllib.request.Request(
-        f"{COMFYUI_SERVER}/prompt",
+        f"http://{COMFYUI_SERVER}/prompt",
         data=data,
         headers={
             'Content-Type': 'application/json',
@@ -61,11 +62,11 @@ def queue_prompt(prompt):
 def get_image(filename, subfolder, folder_type):
     data = {"filename": filename, "subfolder": subfolder, "type": folder_type}
     url_values = urllib.parse.urlencode(data)
-    with urllib.request.urlopen(f"{COMFYUI_SERVER}/view?{url_values}") as response:
+    with urllib.request.urlopen(f"http://{COMFYUI_SERVER}/view?{url_values}") as response:
         return response.read()
 
 def get_history(prompt_id):
-    with urllib.request.urlopen(f"{COMFYUI_SERVER}/history/{prompt_id}") as response:
+    with urllib.request.urlopen(f"http://{COMFYUI_SERVER}/history/{prompt_id}") as response:
         return json.loads(response.read())
 
 @app.websocket("/ws")
@@ -77,28 +78,39 @@ async def websocket_endpoint(websocket: WebSocket):
         
         # Generar un ID único para esta conexión
         client_id = str(uuid.uuid4())
-        active_connections[client_id] = websocket
         print(f"Conexión WebSocket establecida con ID: {client_id}")
         
-        try:
-            while True:
-                # Mantener la conexión viva y escuchar mensajes
-                data = await websocket.receive_text()
-                print(f"Mensaje recibido de {client_id}: {data}")
-                
-                # Aquí puedes procesar los mensajes recibidos
-                # Por ahora solo respondemos con un eco
-                await websocket.send_json({"status": "received", "message": data})
-                
-        except Exception as e:
-            print(f"Error en la conexión WebSocket {client_id}: {str(e)}")
-        finally:
-            if client_id in active_connections:
-                del active_connections[client_id]
-                print(f"Conexión WebSocket cerrada para {client_id}")
-                
+        # Conectar al WebSocket de ComfyUI
+        comfyui_ws_url = f"ws://{COMFYUI_SERVER}/ws?clientId={client_id}"
+        async with websockets.connect(comfyui_ws_url) as comfyui_ws:
+            print(f"Conectado al WebSocket de ComfyUI")
+            
+            # Tarea para reenviar mensajes de ComfyUI al cliente
+            async def forward_comfyui_messages():
+                try:
+                    while True:
+                        message = await comfyui_ws.recv()
+                        await websocket.send_text(message)
+                except Exception as e:
+                    print(f"Error reenviando mensajes de ComfyUI: {str(e)}")
+            
+            # Tarea para reenviar mensajes del cliente a ComfyUI
+            async def forward_client_messages():
+                try:
+                    while True:
+                        message = await websocket.receive_text()
+                        await comfyui_ws.send(message)
+                except Exception as e:
+                    print(f"Error reenviando mensajes del cliente: {str(e)}")
+            
+            # Ejecutar ambas tareas concurrentemente
+            await asyncio.gather(
+                forward_comfyui_messages(),
+                forward_client_messages()
+            )
+            
     except Exception as e:
-        print(f"Error al establecer conexión WebSocket: {str(e)}")
+        print(f"Error en la conexión WebSocket: {str(e)}")
         try:
             await websocket.close()
         except:
@@ -124,327 +136,18 @@ class SimpleGenerationRequest(BaseModel):
     prompt: str
 
 @app.post("/api/generate")
-async def generate_image(
-    image: UploadFile = File(...),
-    mask: UploadFile = File(...),
-    prompt: str = Form(...),
-    negative_prompt: str = Form(""),
-    seed: Optional[int] = Form(None),
-    steps: Optional[int] = Form(20),
-    cfg: Optional[float] = Form(7.0)
-):
+async def generate_image(request: Request):
     try:
-        # Guardar imagen y máscara
-        image_path = os.path.join(UPLOAD_DIR, image.filename)
-        mask_path = os.path.join(UPLOAD_DIR, mask.filename)
+        data = await request.json()
+        prompt = data.get("prompt")
         
-        with open(image_path, "wb") as f:
-            f.write(await image.read())
-        with open(mask_path, "wb") as f:
-            f.write(await mask.read())
-
-        # Crear workflow para ComfyUI
-        workflow = """ 
-{
-  "1": {
-    "inputs": {
-      "unet_name": "flux1-dev.safetensors",
-      "weight_dtype": "fp8_e4m3fn"
-    },
-    "class_type": "UNETLoader",
-    "_meta": {
-      "title": "Load Diffusion Model"
-    }
-  },
-  "3": {
-    "inputs": {
-      "clip_name1": "t5xxl_fp8_e4m3fn.safetensors",
-      "clip_name2": "clip_l.safetensors",
-      "type": "flux",
-      "device": "default"
-    },
-    "class_type": "DualCLIPLoader",
-    "_meta": {
-      "title": "DualCLIPLoader"
-    }
-  },
-  "4": {
-    "inputs": {
-      "text": "bibiloni",
-      "clip": [
-        "3",
-        0
-      ]
-    },
-    "class_type": "CLIPTextEncode",
-    "_meta": {
-      "title": "CLIP Text Encode (Prompt)"
-    }
-  },
-  "5": {
-    "inputs": {
-      "vae_name": "ae.safetensors"
-    },
-    "class_type": "VAELoader",
-    "_meta": {
-      "title": "Load VAE"
-    }
-  },
-  "7": {
-    "inputs": {
-      "text": "",
-      "clip": [
-        "3",
-        0
-      ]
-    },
-    "class_type": "CLIPTextEncode",
-    "_meta": {
-      "title": "CLIP Text Encode (Prompt)"
-    }
-  },
-  "8": {
-    "inputs": {
-      "model": [
-        "20",
-        0
-      ]
-    },
-    "class_type": "DifferentialDiffusion",
-    "_meta": {
-      "title": "Differential Diffusion"
-    }
-  },
-  "9": {
-    "inputs": {
-      "guidance": 3.5,
-      "conditioning": [
-        "4",
-        0
-      ]
-    },
-    "class_type": "FluxGuidance",
-    "_meta": {
-      "title": "FluxGuidance"
-    }
-  },
-  "10": {
-    "inputs": {
-      "noise_mask": true,
-      "positive": [
-        "9",
-        0
-      ],
-      "negative": [
-        "7",
-        0
-      ],
-      "vae": [
-        "5",
-        0
-      ],
-      "pixels": [
-        "17",
-        0
-      ],
-      "mask": [
-        "19",
-        0
-      ]
-    },
-    "class_type": "InpaintModelConditioning",
-    "_meta": {
-      "title": "InpaintModelConditioning"
-    }
-  },
-  "11": {
-    "inputs": {
-      "model": [
-        "8",
-        0
-      ],
-      "conditioning": [
-        "10",
-        0
-      ]
-    },
-    "class_type": "BasicGuider",
-    "_meta": {
-      "title": "BasicGuider"
-    }
-  },
-  "12": {
-    "inputs": {
-      "noise": [
-        "13",
-        0
-      ],
-      "guider": [
-        "11",
-        0
-      ],
-      "sampler": [
-        "14",
-        0
-      ],
-      "sigmas": [
-        "15",
-        0
-      ],
-      "latent_image": [
-        "10",
-        2
-      ]
-    },
-    "class_type": "SamplerCustomAdvanced",
-    "_meta": {
-      "title": "SamplerCustomAdvanced"
-    }
-  },
-  "13": {
-    "inputs": {
-      "noise_seed": 1109338547990423
-    },
-    "class_type": "RandomNoise",
-    "_meta": {
-      "title": "RandomNoise"
-    }
-  },
-  "14": {
-    "inputs": {
-      "sampler_name": "euler"
-    },
-    "class_type": "KSamplerSelect",
-    "_meta": {
-      "title": "KSamplerSelect"
-    }
-  },
-  "15": {
-    "inputs": {
-      "scheduler": "simple",
-      "steps": 20,
-      "denoise": 0.9000000000000001,
-      "model": [
-        "20",
-        0
-      ]
-    },
-    "class_type": "BasicScheduler",
-    "_meta": {
-      "title": "BasicScheduler"
-    }
-  },
-  "17": {
-    "inputs": {
-      "image": "clipspace/clipspace-mask-5649382.600000143.png [input]",
-      "resize": false,
-      "width": 2048,
-      "height": 2048,
-      "repeat": 1,
-      "keep_proportion": true,
-      "divisible_by": 2,
-      "mask_channel": "alpha",
-      "background_color": ""
-    },
-    "class_type": "LoadAndResizeImage",
-    "_meta": {
-      "title": "Load & Resize Image"
-    }
-  },
-  "19": {
-    "inputs": {
-      "kernel_size": 10,
-      "sigma": 10,
-      "mask": [
-        "17",
-        1
-      ]
-    },
-    "class_type": "ImpactGaussianBlurMask",
-    "_meta": {
-      "title": "Gaussian Blur Mask"
-    }
-  },
-  "20": {
-    "inputs": {
-      "lora_name": "Bibiloni1024.safetensors",
-      "strength_model": 0.9500000000000002,
-      "model": [
-        "1",
-        0
-      ]
-    },
-    "class_type": "LoraLoaderModelOnly",
-    "_meta": {
-      "title": "LoraLoaderModelOnly"
-    }
-  },
-  "21": {
-    "inputs": {
-      "samples": [
-        "12",
-        0
-      ],
-      "vae": [
-        "5",
-        0
-      ]
-    },
-    "class_type": "VAEDecode",
-    "_meta": {
-      "title": "VAE Decode"
-    }
-  },
-  "22": {
-    "inputs": {
-      "filename_prefix": "ComfyUI",
-      "images": [
-        "21",
-        0
-      ]
-    },
-    "class_type": "SaveImage",
-    "_meta": {
-      "title": "Save Image"
-    }
-  },
-  "32": {
-    "inputs": {
-      "mask": [
-        "17",
-        1
-      ]
-    },
-    "class_type": "MaskToImage",
-    "_meta": {
-      "title": "Convert Mask to Image"
-    }
-  },
-  "33": {
-    "inputs": {
-      "images": [
-        "32",
-        0
-      ]
-    },
-    "class_type": "PreviewImage",
-    "_meta": {
-      "title": "Preview Image"
-    }
-  }
-}
-"""
-        workflow = json.loads(workflow)
-
-        # Enviar a ComfyUI
-        response = requests.post(
-            f"{COMFYUI_SERVER}/api/prompt",
-            json=workflow
-        )
-        response.raise_for_status()
+        if not prompt:
+            raise HTTPException(status_code=400, detail="Prompt is required")
+            
+        # Enviar el prompt a ComfyUI
+        response = queue_prompt(prompt)
+        return {"prompt_id": response["prompt_id"]}
         
-        return {"message": "Imagen en proceso de generación", "prompt_id": response.json()["prompt_id"]}
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -599,7 +302,7 @@ async def generate_simple_image(request: Request):
                 images = outputs["27"]["images"]
                 if images:
                     image_data = images[0]
-                    image_url = f"{COMFYUI_SERVER}/view?filename={image_data['filename']}&type={image_data['type']}&subfolder={image_data.get('subfolder', '')}"
+                    image_url = f"http://{COMFYUI_SERVER}/view?filename={image_data['filename']}&type={image_data['type']}&subfolder={image_data.get('subfolder', '')}"
                     print(f"Generated image URL: {image_url}")
                     return {"imageUrl": image_url}
 
@@ -613,7 +316,7 @@ async def generate_simple_image(request: Request):
 async def get_progress(prompt_id: str):
     try:
         # Obtener el progreso actual
-        progress = requests.get(f"{COMFYUI_SERVER}/api/progress")
+        progress = requests.get(f"http://{COMFYUI_SERVER}/api/progress")
         if progress.status_code == 200:
             progress_data = progress.json()
             return {
@@ -623,7 +326,7 @@ async def get_progress(prompt_id: str):
             }
         
         # Si no hay progreso, verificar si la generación terminó
-        history = requests.get(f"{COMFYUI_SERVER}/api/history/{prompt_id}")
+        history = requests.get(f"http://{COMFYUI_SERVER}/api/history/{prompt_id}")
         if history.status_code == 200 and history.json():
             return {"status": "completed"}
         
@@ -635,7 +338,7 @@ async def get_progress(prompt_id: str):
 @app.get("/api/status/{prompt_id}")
 async def get_status(prompt_id: str):
     try:
-        response = requests.get(f"{COMFYUI_SERVER}/api/history/{prompt_id}")
+        response = requests.get(f"http://{COMFYUI_SERVER}/api/history/{prompt_id}")
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -644,7 +347,7 @@ async def get_status(prompt_id: str):
 @app.get("/api/history")
 async def get_history_endpoint(max_items: int = 64):
     try:
-        response = requests.get(f"{COMFYUI_SERVER}/api/history")
+        response = requests.get(f"http://{COMFYUI_SERVER}/api/history")
         if response.status_code == 200:
             history = response.json()
             # Limitar el número de items si es necesario
@@ -658,7 +361,7 @@ async def get_history_endpoint(max_items: int = 64):
 @app.get("/api/queue")
 async def get_queue():
     try:
-        response = requests.get(f"{COMFYUI_SERVER}/api/queue")
+        response = requests.get(f"http://{COMFYUI_SERVER}/api/queue")
         if response.status_code == 200:
             return response.json()
         raise HTTPException(status_code=response.status_code, detail="Error al obtener la cola")
