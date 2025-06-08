@@ -69,41 +69,49 @@ def get_history(prompt_id):
         return json.loads(response.read())
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket, client_id: str = Query(None)):
-    print(f"WebSocket connection attempt from client_id: {client_id}")
-    
-    if not client_id:
-        print("WebSocket connection rejected: clientId is required")
-        await websocket.close(code=4000, reason="clientId is required")
-        return
-        
+async def websocket_endpoint(websocket: WebSocket):
     try:
+        print("Nueva conexión WebSocket intentando conectarse...")
         await websocket.accept()
-        print(f"WebSocket connection accepted for client_id: {client_id}")
-        active_connections[client_id] = websocket
+        print("Conexión WebSocket aceptada")
         
-        while True:
-            try:
-                # Mantener la conexión viva
+        # Generar un ID único para esta conexión
+        client_id = str(uuid.uuid4())
+        active_connections[client_id] = websocket
+        print(f"Conexión WebSocket establecida con ID: {client_id}")
+        
+        try:
+            while True:
+                # Mantener la conexión viva y escuchar mensajes
                 data = await websocket.receive_text()
-                print(f"Received message from client {client_id}: {data}")
-            except Exception as e:
-                print(f"Error receiving message from client {client_id}: {str(e)}")
-                break
+                print(f"Mensaje recibido de {client_id}: {data}")
+                
+                # Aquí puedes procesar los mensajes recibidos
+                # Por ahora solo respondemos con un eco
+                await websocket.send_json({"status": "received", "message": data})
+                
+        except Exception as e:
+            print(f"Error en la conexión WebSocket {client_id}: {str(e)}")
+        finally:
+            if client_id in active_connections:
+                del active_connections[client_id]
+                print(f"Conexión WebSocket cerrada para {client_id}")
+                
     except Exception as e:
-        print(f"Error in WebSocket connection for client {client_id}: {str(e)}")
-    finally:
-        if client_id in active_connections:
-            print(f"Cleaning up connection for client {client_id}")
-            del active_connections[client_id]
-            try:
-                await websocket.close()
-            except:
-                pass
+        print(f"Error al establecer conexión WebSocket: {str(e)}")
+        try:
+            await websocket.close()
+        except:
+            pass
 
 async def send_progress(client_id: str, message: dict):
     if client_id in active_connections:
-        await active_connections[client_id].send_json(message)
+        try:
+            await active_connections[client_id].send_json(message)
+        except Exception as e:
+            print(f"Error enviando mensaje a {client_id}: {str(e)}")
+            if client_id in active_connections:
+                del active_connections[client_id]
 
 class GenerationRequest(BaseModel):
     prompt: str
