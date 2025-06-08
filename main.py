@@ -70,19 +70,36 @@ def get_history(prompt_id):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, client_id: str = Query(None)):
+    print(f"WebSocket connection attempt from client_id: {client_id}")
+    
     if not client_id:
+        print("WebSocket connection rejected: clientId is required")
         await websocket.close(code=4000, reason="clientId is required")
         return
         
-    await websocket.accept()
-    active_connections[client_id] = websocket
     try:
+        await websocket.accept()
+        print(f"WebSocket connection accepted for client_id: {client_id}")
+        active_connections[client_id] = websocket
+        
         while True:
-            # Mantener la conexión viva
-            await websocket.receive_text()
-    except:
+            try:
+                # Mantener la conexión viva
+                data = await websocket.receive_text()
+                print(f"Received message from client {client_id}: {data}")
+            except Exception as e:
+                print(f"Error receiving message from client {client_id}: {str(e)}")
+                break
+    except Exception as e:
+        print(f"Error in WebSocket connection for client {client_id}: {str(e)}")
+    finally:
         if client_id in active_connections:
+            print(f"Cleaning up connection for client {client_id}")
             del active_connections[client_id]
+            try:
+                await websocket.close()
+            except:
+                pass
 
 async def send_progress(client_id: str, message: dict):
     if client_id in active_connections:
