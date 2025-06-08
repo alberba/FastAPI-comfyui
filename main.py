@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, WebSocket, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, WebSocket, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import requests
@@ -69,16 +69,20 @@ def get_history(prompt_id):
         return json.loads(response.read())
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket, clientId: str):
+async def websocket_endpoint(websocket: WebSocket, client_id: str = Query(None)):
+    if not client_id:
+        await websocket.close(code=4000, reason="clientId is required")
+        return
+        
     await websocket.accept()
-    active_connections[clientId] = websocket
+    active_connections[client_id] = websocket
     try:
         while True:
             # Mantener la conexión viva
             await websocket.receive_text()
     except:
-        if clientId in active_connections:
-            del active_connections[clientId]
+        if client_id in active_connections:
+            del active_connections[client_id]
 
 async def send_progress(client_id: str, message: dict):
     if client_id in active_connections:
