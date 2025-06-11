@@ -12,6 +12,7 @@ import uuid
 import urllib.request
 import urllib.parse
 import websockets
+from workflows.default_workflow import create_default_workflow
 
 app = FastAPI(title="ComfyUI Image Generation API")
 
@@ -35,7 +36,6 @@ active_connections = {}
 def queue_prompt(prompt):
     p = {"prompt": prompt}
     data = json.dumps(p).encode('utf-8')
-    print(f"Sending to ComfyUI: {data.decode()}")
     
     req = urllib.request.Request(
         f"http://{COMFYUI_SERVER}/prompt",
@@ -48,7 +48,6 @@ def queue_prompt(prompt):
     try:
         with urllib.request.urlopen(req) as response:
             response_data = response.read()
-            print(f"ComfyUI raw response: {response_data.decode()}")
             return json.loads(response_data)
     except urllib.error.HTTPError as e:
         print(f"HTTP Error: {e.code} - {e.reason}")
@@ -135,213 +134,62 @@ class GenerationRequest(BaseModel):
 class SimpleGenerationRequest(BaseModel):
     prompt: str
 
-@app.post("/api/generate")
-async def generate_image(request: Request):
-    try:
-        data = await request.json()
-        prompt = data.get("prompt")
-        
-        if not prompt:
-            raise HTTPException(status_code=400, detail="Prompt is required")
-            
-        # Enviar el prompt a ComfyUI
-        response = queue_prompt(prompt)
-        return {"prompt_id": response["prompt_id"]}
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+class ImageRequest(BaseModel):
+    prompt: str
+    cfg: Optional[float] = 1.0
+    steps: Optional[int] = 25
+
+async def get_prompt(request: Request) -> str:
+    data = await request.json()
+    if not data or "prompt" not in data:
+        raise HTTPException(status_code=400, detail="El campo 'prompt' es requerido")
+    
+    prompt = data["prompt"]
+    return prompt
+
+async def wait_for_generation(prompt_id: str):
+    while True:
+        try:
+            history = get_history(prompt_id)
+            if prompt_id in history:
+                break
+        except Exception as e:
+            print(f"Error getting history: {str(e)}")
+        await asyncio.sleep(1)
+
+def prepare_image_url(prompt_id: str):
+    history_data = get_history(prompt_id)
+    if prompt_id in history_data:
+        outputs = history_data[prompt_id]["outputs"]
+        if "27" in outputs:  # ID del nodo SaveImage
+            images = outputs["27"]["images"]
+            if images:
+                image_data = images[0]
+                image_url = f"http://{COMFYUI_SERVER}/view?filename={image_data['filename']}&type={image_data['type']}&subfolder={image_data.get('subfolder', '')}"
+                print(f"Generated image URL: {image_url}")
+                return {"imageUrl": image_url}
+
+    raise HTTPException(status_code=500, detail="No se pudo obtener la imagen generada")
 
 @app.post("/api/generate-simple")
-async def generate_simple_image(request: Request):
+async def generate_simple_image(request: ImageRequest):
     try:
-        # Obtener y validar los datos de la petición
-        data = await request.json()
-        print(f"Received data: {data}")
-        
-        if not data or "prompt" not in data:
-            raise HTTPException(status_code=400, detail="El campo 'prompt' es requerido")
-        
-        prompt = data["prompt"]
-        print(f"Using prompt: {prompt}")
-
-        # Generar un seed aleatorio
         random_seed = random.randint(0, 2**32 - 1)
-        print(f"Generated seed: {random_seed}")
-
-        # Crear workflow simple para ComfyUI
-        workflow = {
-            "5": {
-                "inputs": {
-                    "seed": random_seed,
-                    "steps": 25,
-                    "cfg": 1,
-                    "sampler_name": "euler",
-                    "scheduler": "normal",
-                    "denoise": 1,
-                    "model": ["35", 0],
-                    "positive": ["29", 0],
-                    "negative": ["20", 0],
-                    "latent_image": ["6", 0]
-                },
-                "class_type": "KSampler"
-            },
-            "6": {
-                "inputs": {
-                    "width": 1024,
-                    "height": 1024,
-                    "batch_size": 1
-                },
-                "class_type": "EmptyLatentImage"
-            },
-            "7": {
-                "inputs": {
-                    "samples": ["5", 0],
-                    "vae": ["9", 0]
-                },
-                "class_type": "VAEDecode"
-            },
-            "9": {
-                "inputs": {
-                    "vae_name": "ae.safetensors"
-                },
-                "class_type": "VAELoader"
-            },
-            "11": {
-                "inputs": {
-                    "clip_name1": "t5xxl_fp8_e4m3fn.safetensors",
-                    "clip_name2": "clip_l.safetensors",
-                    "type": "flux",
-                    "device": "default"
-                },
-                "class_type": "DualCLIPLoader"
-            },
-            "14": {
-                "inputs": {
-                    "text": prompt,
-                    "clip": ["11", 0]
-                },
-                "class_type": "CLIPTextEncode"
-            },
-            "15": {
-                "inputs": {
-                    "unet_name": "flux1-dev.safetensors",
-                    "weight_dtype": "fp8_e4m3fn"
-                },
-                "class_type": "UNETLoader"
-            },
-            "18": {
-                "inputs": {
-                    "lora_name": "mascaroPerfeccionadoFlux.safetensors",
-                    "strength_model": 1.0000000000000002,
-                    "model": ["15", 0]
-                },
-                "class_type": "LoraLoaderModelOnly"
-            },
-            "20": {
-                "inputs": {
-                    "text": "",
-                    "clip": ["11", 0]
-                },
-                "class_type": "CLIPTextEncode"
-            },
-            "27": {
-                "inputs": {
-                    "filename_prefix": "LoRA_Flux_no_inpaint",
-                    "images": ["7", 0]
-                },
-                "class_type": "SaveImage"
-            },
-            "29": {
-                "inputs": {
-                    "guidance": 3.5,
-                    "conditioning": ["14", 0]
-                },
-                "class_type": "FluxGuidance"
-            },
-            "35": {
-                "inputs": {
-                    "lora_name": "aidmaImageUprader-FLUX-v0.3.safetensors",
-                    "strength_model": 1.0000000000000002,
-                    "model": ["18", 0]
-                },
-                "class_type": "LoraLoaderModelOnly"
-            }
-        }
-        print(f"Sending workflow to ComfyUI: {json.dumps(workflow, indent=2)}")
+        workflow = create_default_workflow(request.prompt, random_seed, cfg=request.cfg, steps=request.steps)
 
         # Enviar a ComfyUI
         try:
             response = queue_prompt(workflow)
-            print(f"ComfyUI response: {response}")
             prompt_id = response["prompt_id"]
-            print(f"Got prompt_id: {prompt_id}")
         except Exception as e:
             print(f"Error in queue_prompt: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
 
-        # Esperar a que la generación termine
-        print("Waiting for generation to complete...")
-        while True:
-            try:
-                history = get_history(prompt_id)
-                print(f"History response: {history}")
-                if prompt_id in history:
-                    break
-            except Exception as e:
-                print(f"Error getting history: {str(e)}")
-            await asyncio.sleep(1)
-
-        # Obtener la imagen generada
-        print("Getting generated image...")
-        history_data = get_history(prompt_id)
-        print(f"Final history data: {history_data}")
-        
-        if prompt_id in history_data:
-            outputs = history_data[prompt_id]["outputs"]
-            if "27" in outputs:  # ID del nodo SaveImage
-                images = outputs["27"]["images"]
-                if images:
-                    image_data = images[0]
-                    image_url = f"http://{COMFYUI_SERVER}/view?filename={image_data['filename']}&type={image_data['type']}&subfolder={image_data.get('subfolder', '')}"
-                    print(f"Generated image URL: {image_url}")
-                    return {"imageUrl": image_url}
-
-        raise HTTPException(status_code=500, detail="No se pudo obtener la imagen generada")
+        await wait_for_generation(prompt_id)
+        return prepare_image_url(prompt_id)
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/progress/{prompt_id}")
-async def get_progress(prompt_id: str):
-    try:
-        # Obtener el progreso actual
-        progress = requests.get(f"http://{COMFYUI_SERVER}/api/progress")
-        if progress.status_code == 200:
-            progress_data = progress.json()
-            return {
-                "status": "in_progress",
-                "progress": progress_data.get("value", 0),
-                "eta": progress_data.get("eta", 0)
-            }
-        
-        # Si no hay progreso, verificar si la generación terminó
-        history = requests.get(f"http://{COMFYUI_SERVER}/api/history/{prompt_id}")
-        if history.status_code == 200 and history.json():
-            return {"status": "completed"}
-        
-        return {"status": "pending"}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/status/{prompt_id}")
-async def get_status(prompt_id: str):
-    try:
-        response = requests.get(f"http://{COMFYUI_SERVER}/api/history/{prompt_id}")
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/history")
@@ -357,20 +205,6 @@ async def get_history_endpoint(max_items: int = 64):
         raise HTTPException(status_code=response.status_code, detail="Error al obtener el historial")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/queue")
-async def get_queue():
-    try:
-        response = requests.get(f"http://{COMFYUI_SERVER}/api/queue")
-        if response.status_code == 200:
-            return response.json()
-        raise HTTPException(status_code=response.status_code, detail="Error al obtener la cola")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/test")
-async def test():
-    return {"message": "Hello, World!"}
 
 if __name__ == "__main__":
     import uvicorn
