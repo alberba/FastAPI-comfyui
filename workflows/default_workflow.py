@@ -95,7 +95,7 @@ def create_default_workflow(prompt: str, random_seed: int, cfg: float = 1.0, ste
         "35": {
             "inputs": {
                 "lora_name": "aidmaImageUprader-FLUX-v0.3.safetensors",
-                "strength_model": 1.0000000000000002,
+                "strength_model": 0.2,
                 "model": ["15", 0]
             },
             "class_type": "LoraLoaderModelOnly"

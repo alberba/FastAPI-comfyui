@@ -136,6 +136,7 @@ class SimpleGenerationRequest(BaseModel):
 
 class ImageRequest(BaseModel):
     prompt: str
+    seed: Optional[int] = None
     cfg: Optional[float] = 1.0
     steps: Optional[int] = 25
 
@@ -157,7 +158,7 @@ async def wait_for_generation(prompt_id: str):
             print(f"Error getting history: {str(e)}")
         await asyncio.sleep(1)
 
-def prepare_image_url(prompt_id: str):
+def prepare_image_url(prompt_id: str) -> dict:
     history_data = get_history(prompt_id)
     if prompt_id in history_data:
         outputs = history_data[prompt_id]["outputs"]
@@ -174,8 +175,8 @@ def prepare_image_url(prompt_id: str):
 @app.post("/api/generate-simple")
 async def generate_simple_image(request: ImageRequest):
     try:
-        random_seed = random.randint(0, 2**32 - 1)
-        workflow = create_default_workflow(request.prompt, random_seed, cfg=request.cfg, steps=request.steps)
+        seed = request.seed if request.seed is not None else random.randint(0, 2**32 - 1)
+        workflow = create_default_workflow(request.prompt, seed, cfg=request.cfg, steps=request.steps)
 
         # Enviar a ComfyUI
         try:
@@ -186,7 +187,9 @@ async def generate_simple_image(request: ImageRequest):
             raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
 
         await wait_for_generation(prompt_id)
-        return prepare_image_url(prompt_id)
+        image_data = prepare_image_url(prompt_id)
+        image_data["seed"] = seed
+        return image_data
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
