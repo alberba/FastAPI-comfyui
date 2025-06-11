@@ -33,8 +33,9 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # Almacenar las conexiones WebSocket activas
 active_connections = {}
 
-def queue_prompt(prompt):
+def queue_prompt(prompt, number):
     p = {"prompt": prompt}
+    p["number"] = number
     data = json.dumps(p).encode('utf-8')
     
     req = urllib.request.Request(
@@ -139,12 +140,12 @@ class ImageRequest(BaseModel):
     seed: Optional[int] = None
     cfg: Optional[float] = 1.0
     steps: Optional[int] = 25
+    number: Optional[int] = 1
 
 async def get_prompt(request: Request) -> str:
     data = await request.json()
     if not data or "prompt" not in data:
         raise HTTPException(status_code=400, detail="El campo 'prompt' es requerido")
-    
     prompt = data["prompt"]
     return prompt
 
@@ -180,7 +181,7 @@ async def generate_simple_image(request: ImageRequest):
 
         # Enviar a ComfyUI
         try:
-            response = queue_prompt(workflow)
+            response = queue_prompt(workflow, request.number)
             prompt_id = response["prompt_id"]
         except Exception as e:
             print(f"Error in queue_prompt: {str(e)}")
