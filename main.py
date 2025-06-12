@@ -13,6 +13,7 @@ import urllib.request
 import urllib.parse
 import websockets
 from workflows.default_workflow import create_default_workflow
+from workflows.lora_workflow import create_lora_workflow
 
 app = FastAPI(title="ComfyUI Image Generation API")
 
@@ -142,6 +143,15 @@ class ImageRequest(BaseModel):
     steps: Optional[int] = 25
     number: Optional[int] = 1
 
+class ImageWithMaskRequest(BaseModel):
+    prompt: str
+    seed: Optional[int] = None
+    cfg: Optional[float] = 1.0
+    steps: Optional[int] = 25
+    number: Optional[int] = 1
+    mask: Optional[str] = None
+    image: Optional[str] = None
+
 async def get_prompt(request: Request) -> str:
     data = await request.json()
     if not data or "prompt" not in data:
@@ -159,12 +169,12 @@ async def wait_for_generation(prompt_id: str):
             print(f"Error getting history: {str(e)}")
         await asyncio.sleep(1)
 
-def prepare_image_url(prompt_id: str) -> dict:
+def prepare_image_url(prompt_id: str, saveImageNode: str) -> dict:
     history_data = get_history(prompt_id)
     if prompt_id in history_data:
         outputs = history_data[prompt_id]["outputs"]
-        if "27" in outputs:  # ID del nodo SaveImage
-            images = outputs["27"]["images"]
+        if saveImageNode in outputs:  # ID del nodo SaveImage
+            images = outputs[saveImageNode]["images"]
             if images:
                 image_data = images[0]
                 image_url = f"http://{COMFYUI_SERVER}/view?filename={image_data['filename']}&type={image_data['type']}&subfolder={image_data.get('subfolder', '')}"
@@ -188,7 +198,82 @@ async def generate_simple_image(request: ImageRequest):
             raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
 
         await wait_for_generation(prompt_id)
-        image_data = prepare_image_url(prompt_id)
+        image_data = prepare_image_url(prompt_id, "27")
+        image_data["seed"] = seed
+        return image_data
+
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/generate-mask")
+async def generate_mask_image(request: ImageWithMaskRequest):
+    try:
+        seed = request.seed if request.seed is not None else random.randint(0, 2**32 - 1)
+        workflow = create_lora_workflow(request.prompt, seed, cfg=request.cfg, steps=request.steps)
+
+        # Subir imagen y máscara a ComfyUI antes de enviar el workflow
+        import base64
+        from io import BytesIO
+        files_uploaded = []
+        for img_type in ["image", "mask"]:
+            img_b64: str = getattr(request, img_type, None)
+            print(img_b64)
+            if img_b64:
+                if img_b64.startswith(("http://", "https://")):
+                    print("hola")
+                    # Descarga el recurso remoto como bytes
+                    resp = requests.get(img_b64, timeout=10)
+                    if resp.status_code != 200:
+                        raise HTTPException(
+                            status_code=502,
+                            detail=f"Error al descargar la URL para {img_type}: {resp.status_code}"
+                        )
+                    img_bytes = resp.content
+                else:
+                    # a) Limpia prefijo y padding
+                    img_b64 = img_b64.split(",", 1)[-1]  # si viniera con data:image/… se descarta
+                    img_b64 = "".join(img_b64.split())
+                    padding = len(img_b64) % 4
+                    if padding:
+                        img_b64 += "=" * (4 - padding)
+
+                    try:
+                        img_bytes = base64.b64decode(img_b64)
+                    except:
+                        raise HTTPException(status_code=400, detail=f"Base64 inválido para {img_type}: {e}")
+                
+                
+                # c) Prepara multipart/form-data
+                upload_url = f"http://{COMFYUI_SERVER}/upload/image"
+                files = {
+                    "image": (f"{img_type}.png", BytesIO(img_bytes), "image/png")
+                }
+                data = {
+                    "type": "input",
+                    "overwrite": "true",
+                    "subfolder": ""
+                }
+                # d) Llama a ComfyUI
+                resp = requests.post(upload_url, data=data, files=files)
+                if resp.status_code != 200:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Error subiendo {img_type}: {resp.status_code} – {resp.text}"
+                    )
+
+                files_uploaded.append(resp.json())
+
+        # Enviar a ComfyUI
+        try:
+            response = queue_prompt(workflow, request.number)            
+            prompt_id = response["prompt_id"]
+        except Exception as e:
+            print(f"Error in queue_prompt: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
+
+        await wait_for_generation(prompt_id)
+        image_data = prepare_image_url(prompt_id, "22")
         image_data["seed"] = seed
         return image_data
 
