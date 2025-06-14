@@ -12,8 +12,12 @@ import uuid
 import urllib.request
 import urllib.parse
 import websockets
+import urllib.error
+import binascii
 from workflows.default_workflow import create_default_workflow
 from workflows.lora_workflow import create_lora_workflow
+import base64
+from io import BytesIO
 
 app = FastAPI(title="ComfyUI Image Generation API")
 
@@ -91,7 +95,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 try:
                     while True:
                         message = await comfyui_ws.recv()
-                        await websocket.send_text(message)
+                        await websocket.send_text(json.dumps(message))
                 except Exception as e:
                     print(f"Error reenviando mensajes de ComfyUI: {str(e)}")
             
@@ -138,19 +142,23 @@ class SimpleGenerationRequest(BaseModel):
 
 class ImageRequest(BaseModel):
     prompt: str
-    seed: Optional[int] = None
-    cfg: Optional[float] = 1.0
-    steps: Optional[int] = 25
-    number: Optional[int] = 1
+    width: int = 1024
+    height: int = 1024
+    seed: int = -1
+    cfg: float = 1.0
+    steps: int = 25
+    number: int = 1
 
 class ImageWithMaskRequest(BaseModel):
     prompt: str
-    seed: Optional[int] = None
-    cfg: Optional[float] = 1.0
-    steps: Optional[int] = 25
-    number: Optional[int] = 1
-    mask: Optional[str] = None
-    image: Optional[str] = None
+    width: int = 1024
+    height: int = 1024
+    seed: int = -1
+    cfg: float = 1.0
+    steps: int = 25
+    number: int = 1
+    mask: str
+    image: str
 
 async def get_prompt(request: Request) -> str:
     data = await request.json()
@@ -186,8 +194,11 @@ def prepare_image_url(prompt_id: str, saveImageNode: str) -> dict:
 @app.post("/api/generate-simple")
 async def generate_simple_image(request: ImageRequest):
     try:
-        seed = request.seed if request.seed is not None else random.randint(0, 2**32 - 1)
-        workflow = create_default_workflow(request.prompt, seed, cfg=request.cfg, steps=request.steps)
+        seed = random.randint(0, 2**32 - 1) if request.seed == -1 else request.seed
+        cfg_val = request.cfg
+        steps_val = request.steps
+
+        workflow = create_default_workflow(request.prompt, seed, cfg=cfg_val, steps=steps_val, width=request.width, height=request.height)
 
         # Enviar a ComfyUI
         try:
@@ -210,15 +221,12 @@ async def generate_simple_image(request: ImageRequest):
 async def generate_mask_image(request: ImageWithMaskRequest):
     try:
         seed = request.seed if request.seed is not None else random.randint(0, 2**32 - 1)
-        workflow = create_lora_workflow(request.prompt, seed, cfg=request.cfg, steps=request.steps)
+        workflow = create_lora_workflow(request.prompt, seed, cfg=request.cfg, steps=request.steps, width=request.width, height=request.height)
 
         # Subir imagen y máscara a ComfyUI antes de enviar el workflow
-        import base64
-        from io import BytesIO
         files_uploaded = []
         for img_type in ["image", "mask"]:
-            img_b64: str = getattr(request, img_type, None)
-            print(img_b64)
+            img_b64: Optional[str] = getattr(request, img_type, None)
             if img_b64:
                 if img_b64.startswith(("http://", "https://")):
                     print("hola")
@@ -240,7 +248,7 @@ async def generate_mask_image(request: ImageWithMaskRequest):
 
                     try:
                         img_bytes = base64.b64decode(img_b64)
-                    except:
+                    except binascii.Error as e:
                         raise HTTPException(status_code=400, detail=f"Base64 inválido para {img_type}: {e}")
                 
                 

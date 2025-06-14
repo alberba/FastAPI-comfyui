@@ -1,4 +1,4 @@
-def create_lora_workflow(prompt: str, random_seed: int, cfg: float = 1.0, steps: int = 25) -> dict:
+def create_lora_workflow(prompt: str, random_seed: int, width: int, height: int, cfg: float = 1.0, steps: int = 25) -> dict:
     """
     Crea un workflow simple para ComfyUI con la configuración por defecto.
     
@@ -36,7 +36,7 @@ def create_lora_workflow(prompt: str, random_seed: int, cfg: float = 1.0, steps:
     },
     "4": {
         "inputs": {
-        "text": prompt,
+        "text": "bibiloni",
         "clip": [
             "3",
             0
@@ -110,7 +110,7 @@ def create_lora_workflow(prompt: str, random_seed: int, cfg: float = 1.0, steps:
             0
         ],
         "pixels": [
-            "40",
+            "42",
             0
         ],
         "mask": [
@@ -169,7 +169,7 @@ def create_lora_workflow(prompt: str, random_seed: int, cfg: float = 1.0, steps:
     },
     "13": {
         "inputs": {
-        "noise_seed": random_seed
+        "noise_seed": 1109338547990423
         },
         "class_type": "RandomNoise",
         "_meta": {
@@ -188,7 +188,7 @@ def create_lora_workflow(prompt: str, random_seed: int, cfg: float = 1.0, steps:
     "15": {
         "inputs": {
         "scheduler": "simple",
-        "steps": steps,
+        "steps": 20,
         "denoise": 0.9000000000000001,
         "model": [
             "20",
@@ -205,8 +205,8 @@ def create_lora_workflow(prompt: str, random_seed: int, cfg: float = 1.0, steps:
         "kernel_size": 10,
         "sigma": 10,
         "mask": [
-            "41",
-            0
+            "43",
+            1
         ]
         },
         "class_type": "ImpactGaussianBlurMask",
@@ -257,23 +257,38 @@ def create_lora_workflow(prompt: str, random_seed: int, cfg: float = 1.0, steps:
         "title": "Save Image"
         }
     },
-    "40": {
+    "42": {
         "inputs": {
-        "image": "image.png"
+        "image": "image.png",
+        "resize": "true",
+        "width": width,
+        "height": height,
+        "repeat": 1,
+        "keep_proportion": "false",
+        "divisible_by": 2,
+        "mask_channel": "alpha",
+        "background_color": ""
         },
-        "class_type": "LoadImage",
+        "class_type": "LoadAndResizeImage",
         "_meta": {
-        "title": "Load Image"
+        "title": "Load & Resize Image"
         }
     },
-    "41": {
+    "43": {
         "inputs": {
         "image": "mask.png",
-        "channel": "alpha"
+        "resize": "true",
+        "width": width,
+        "height": height,
+        "repeat": 1,
+        "keep_proportion": "false",
+        "divisible_by": 2,
+        "mask_channel": "alpha",
+        "background_color": ""
         },
-        "class_type": "LoadImageMask",
+        "class_type": "LoadAndResizeImage",
         "_meta": {
-        "title": "Load Image (as Mask)"
+        "title": "Load & Resize Image"
         }
     }
     }

@@ -1,4 +1,4 @@
-def create_default_workflow(prompt: str, random_seed: int, cfg: float = 1.0, steps: int = 25) -> dict:
+def create_default_workflow(prompt: str, random_seed: int, width: int, height: int, cfg: float = 1.0, steps: int = 25, ) -> dict:
     """
     Crea un workflow simple para ComfyUI con la configuración por defecto.
     
@@ -29,8 +29,8 @@ def create_default_workflow(prompt: str, random_seed: int, cfg: float = 1.0, ste
         },
         "6": {
             "inputs": {
-                "width": 1024,
-                "height": 1024,
+                "width": width,
+                "height": height,
                 "batch_size": 1
             },
             "class_type": "EmptyLatentImage"
