@@ -191,7 +191,7 @@ def prepare_image_url(prompt_id: str, saveImageNode: str) -> dict:
 
     raise HTTPException(status_code=500, detail="No se pudo obtener la imagen generada")
 
-@app.post("/api/generate-simple")
+@app.post("/generate-simple")
 async def generate_simple_image(request: ImageRequest):
     try:
         seed = random.randint(0, 2**32 - 1) if request.seed == -1 else request.seed
@@ -217,7 +217,7 @@ async def generate_simple_image(request: ImageRequest):
         print(f"Unexpected error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/generate-mask")
+@app.post("/generate-mask")
 async def generate_mask_image(request: ImageWithMaskRequest):
     try:
         seed = request.seed if request.seed is not None else random.randint(0, 2**32 - 1)
@@ -287,20 +287,6 @@ async def generate_mask_image(request: ImageWithMaskRequest):
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/history")
-async def get_history_endpoint(max_items: int = 64):
-    try:
-        response = requests.get(f"http://{COMFYUI_SERVER}/api/history")
-        if response.status_code == 200:
-            history = response.json()
-            # Limitar el número de items si es necesario
-            if max_items and len(history) > max_items:
-                history = dict(list(history.items())[-max_items:])
-            return history
-        raise HTTPException(status_code=response.status_code, detail="Error al obtener el historial")
-    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
