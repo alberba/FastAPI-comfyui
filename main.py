@@ -1,3 +1,4 @@
+from ast import Str
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, WebSocket, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -63,18 +64,12 @@ def queue_prompt(prompt, number):
     except Exception as e:
         print(f"Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error inesperado: {str(e)}")
-
-def get_image(filename, subfolder, folder_type):
-    data = {"filename": filename, "subfolder": subfolder, "type": folder_type}
-    url_values = urllib.parse.urlencode(data)
-    with urllib.request.urlopen(f"http://{COMFYUI_SERVER}/view?{url_values}") as response:
-        return response.read()
-
+    
 def get_history(prompt_id):
     with urllib.request.urlopen(f"http://{COMFYUI_SERVER}/history/{prompt_id}") as response:
         return json.loads(response.read())
 
-@app.websocket("/ws")
+@app.websocket("/lorasuib/ws/")
 async def websocket_endpoint(websocket: WebSocket):
     try:
         print("Nueva conexión WebSocket intentando conectarse...")
@@ -159,6 +154,7 @@ class ImageWithMaskRequest(BaseModel):
     number: int = 1
     mask: str
     image: str
+    lora: str
 
 async def get_prompt(request: Request) -> str:
     data = await request.json()
@@ -191,7 +187,11 @@ def prepare_image_url(prompt_id: str, saveImageNode: str) -> dict:
 
     raise HTTPException(status_code=500, detail="No se pudo obtener la imagen generada")
 
-@app.post("/generate-simple")
+def get_image(data):
+    with urllib.request.urlopen(data["imageUrl"]) as response:
+        return base64.b64encode(response.read())
+
+@app.post("/lorasuib/api/generate-simple")
 async def generate_simple_image(request: ImageRequest):
     try:
         seed = random.randint(0, 2**32 - 1) if request.seed == -1 else request.seed
@@ -210,6 +210,9 @@ async def generate_simple_image(request: ImageRequest):
 
         await wait_for_generation(prompt_id)
         image_data = prepare_image_url(prompt_id, "27")
+        
+        image = get_image(image_data)
+        image_data["image"] = image
         image_data["seed"] = seed
         return image_data
 
@@ -217,11 +220,11 @@ async def generate_simple_image(request: ImageRequest):
         print(f"Unexpected error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/generate-mask")
+@app.post("/lorasuib/api/generate-mask")
 async def generate_mask_image(request: ImageWithMaskRequest):
     try:
         seed = request.seed if request.seed is not None else random.randint(0, 2**32 - 1)
-        workflow = create_lora_workflow(request.prompt, seed, cfg=request.cfg, steps=request.steps, width=request.width, height=request.height)
+        workflow = create_lora_workflow(request.prompt, seed, cfg=request.cfg, steps=request.steps, width=request.width, height=request.height, lora=request.lora)
 
         # Subir imagen y máscara a ComfyUI antes de enviar el workflow
         files_uploaded = []
@@ -282,11 +285,23 @@ async def generate_mask_image(request: ImageWithMaskRequest):
 
         await wait_for_generation(prompt_id)
         image_data = prepare_image_url(prompt_id, "22")
+        image = get_image(image_data)
+        image_data["image"] = image
         image_data["seed"] = seed
         return image_data
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/lorasuib/api/get-loras")
+async def get_loras():
+    try:
+        response = requests.get(f"http://{COMFYUI_SERVER}/models/loras")
+        if response.status_code == 200:
+            return response.json()
+        raise HTTPException(status_code=response.status_code, detail="Error al obtener los modelos LORA")
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

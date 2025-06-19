@@ -1,4 +1,4 @@
-def create_lora_workflow(prompt: str, random_seed: int, width: int, height: int, cfg: float = 1.0, steps: int = 25) -> dict:
+def create_lora_workflow(prompt: str, random_seed: int, width: int, height: int, lora: str, cfg: float = 1.0, steps: int = 20) -> dict:
     """
     Crea un workflow simple para ComfyUI con la configuración por defecto.
     
@@ -6,7 +6,7 @@ def create_lora_workflow(prompt: str, random_seed: int, width: int, height: int,
         prompt (str): El prompt de texto para la generación
         random_seed (int): Semilla aleatoria para la generación
         cfg (float): Valor de CFG para la generación (default: 1.0)
-        steps (int): Número de pasos para la generación (default: 25)
+        steps (int): Número de pasos para la generación (default: 20)
         
     Returns:
         dict: Workflow configurado para ComfyUI
@@ -36,7 +36,7 @@ def create_lora_workflow(prompt: str, random_seed: int, width: int, height: int,
     },
     "4": {
         "inputs": {
-        "text": "bibiloni",
+        "text": prompt,
         "clip": [
             "3",
             0
@@ -169,7 +169,7 @@ def create_lora_workflow(prompt: str, random_seed: int, width: int, height: int,
     },
     "13": {
         "inputs": {
-        "noise_seed": 1109338547990423
+        "noise_seed": random_seed,
         },
         "class_type": "RandomNoise",
         "_meta": {
@@ -188,7 +188,7 @@ def create_lora_workflow(prompt: str, random_seed: int, width: int, height: int,
     "15": {
         "inputs": {
         "scheduler": "simple",
-        "steps": 20,
+        "steps": steps,
         "denoise": 0.9000000000000001,
         "model": [
             "20",
@@ -216,7 +216,7 @@ def create_lora_workflow(prompt: str, random_seed: int, width: int, height: int,
     },
     "20": {
         "inputs": {
-        "lora_name": "Bibiloni1024.safetensors",
+        "lora_name": lora,
         "strength_model": 0.9500000000000002,
         "model": [
             "1",
