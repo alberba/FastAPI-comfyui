@@ -19,6 +19,8 @@ from workflows.default_workflow import create_default_workflow
 from workflows.lora_workflow import create_lora_workflow
 import base64
 from io import BytesIO
+import time
+from contextlib import asynccontextmanager
 
 app = FastAPI(title="ComfyUI Image Generation API")
 
@@ -38,6 +40,51 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Almacenar las conexiones WebSocket activas
 active_connections = {}
+
+# Global variable to track the last activity time
+last_activity_time = time.time()
+comfyui_is_free = False # New global variable to track if ComfyUI is free
+
+def send_free_to_comfyui():
+    """Sends a POST request to the /free endpoint on the ComfyUI server."""
+    try:
+        response = requests.post(f"http://{COMFYUI_SERVER}/free")
+        response.raise_for_status()  # Raise an exception for HTTP errors (4xx or 5xx)
+        print("Sent /free endpoint to ComfyUI successfully.")
+    except requests.exceptions.RequestException as e:
+        print(f"Error sending /free to ComfyUI: {e}")
+
+INACTIVITY_TIMEOUT = 20  # seconds
+CHECK_INTERVAL = 5 # seconds
+
+async def inactivity_monitor():
+    global comfyui_is_free
+    while True:
+        await asyncio.sleep(CHECK_INTERVAL)
+        global last_activity_time
+        if (time.time() - last_activity_time) > INACTIVITY_TIMEOUT and not comfyui_is_free:
+            send_free_to_comfyui()
+            comfyui_is_free = True # Set to True after sending the signal
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    print("Starting inactivity monitor...")
+    asyncio.create_task(inactivity_monitor())
+    yield
+    # Shutdown (if needed, though not for this specific task)
+    print("Inactivity monitor shutting down.")
+
+app = FastAPI(title="ComfyUI Image Generation API", lifespan=lifespan)
+
+@app.middleware("http")
+async def activity_middleware(request: Request, call_next):
+    global last_activity_time
+    global comfyui_is_free # Declare global to modify it
+    last_activity_time = time.time()
+    comfyui_is_free = False # Reset to False on any activity
+    response = await call_next(request)
+    return response
 
 def queue_prompt(prompt, number):
     p = {"prompt": prompt}
