@@ -12,7 +12,6 @@ import random
 import uuid
 import urllib.request
 import urllib.parse
-import websockets
 import urllib.error
 import binascii
 from workflows.default_workflow import create_default_workflow
@@ -21,6 +20,8 @@ import base64
 from io import BytesIO
 import time
 from contextlib import asynccontextmanager
+from websockets.exceptions import ConnectionClosedOK
+from websockets.client import connect
 
 app = FastAPI(title="ComfyUI Image Generation API")
 
@@ -129,31 +130,23 @@ async def websocket_endpoint(websocket: WebSocket):
         
         # Conectar al WebSocket de ComfyUI
         comfyui_ws_url = f"ws://{COMFYUI_SERVER}/ws?clientId={client_id}"
-        async with websockets.connect(comfyui_ws_url) as comfyui_ws:
+        async with connect(comfyui_ws_url) as comfyui_ws:
             print(f"Conectado al WebSocket de ComfyUI")
             
             # Tarea para reenviar mensajes de ComfyUI al cliente
-            async def forward_comfyui_messages():
+            async def forward_messages(source_ws, destination_ws):
                 try:
-                    while True:
-                        message = await comfyui_ws.recv()
-                        await websocket.send_text(json.dumps(message))
+                    async for message in source_ws:
+                        await destination_ws.send(message)
+                except ConnectionClosedOK:
+                    pass
                 except Exception as e:
-                    print(f"Error reenviando mensajes de ComfyUI: {str(e)}")
-            
-            # Tarea para reenviar mensajes del cliente a ComfyUI
-            async def forward_client_messages():
-                try:
-                    while True:
-                        message = await websocket.receive_text()
-                        await comfyui_ws.send(message)
-                except Exception as e:
-                    print(f"Error reenviando mensajes del cliente: {str(e)}")
-            
+                    print(f"Error reenviando mensajes: {str(e)}")
+
             # Ejecutar ambas tareas concurrentemente
             await asyncio.gather(
-                forward_comfyui_messages(),
-                forward_client_messages()
+                forward_messages(comfyui_ws, websocket),
+                forward_messages(websocket, comfyui_ws)
             )
             
     except Exception as e:
@@ -171,6 +164,106 @@ async def send_progress(client_id: str, message: dict):
             print(f"Error enviando mensaje a {client_id}: {str(e)}")
             if client_id in active_connections:
                 del active_connections[client_id]
+
+def prepare_image_url(prompt_id: str, saveImageNode: str) -> dict:
+    history_data = get_history(prompt_id)
+    if prompt_id in history_data:
+        outputs = history_data[prompt_id]["outputs"]
+        if saveImageNode in outputs:  # ID del nodo SaveImage
+            images = outputs[saveImageNode]["images"]
+            if images:
+                image_data = images[0]
+                image_url = f"http://{COMFYUI_SERVER}/view?filename={image_data['filename']}&type={image_data['type']}&subfolder={image_data.get('subfolder', '')}"
+                print(f"Generated image URL: {image_url}")
+                return {"imageUrl": image_url}
+
+    raise HTTPException(status_code=500, detail="No se pudo obtener la imagen generada")
+
+def fetch_image_as_base64(data):
+    with urllib.request.urlopen(data["imageUrl"]) as response:
+        return base64.b64encode(response.read())
+
+def prepare_response(image_data, seed):
+    image = fetch_image_as_base64(image_data)
+    image_data["image"] = image
+    image_data["seed"] = seed
+    return image_data
+
+async def _upload_image_to_comfyui(img_b64: Optional[str], img_type: str) -> dict:
+    if not img_b64:
+        return {}
+
+    if img_b64.startswith(("http://", "https://")):
+        resp = requests.get(img_b64, timeout=10)
+        if resp.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Error al descargar la URL para {img_type}: {resp.status_code}"
+            )
+        img_bytes = resp.content
+    else:
+        img_b64 = img_b64.split(",", 1)[-1]
+        img_b64 = "".join(img_b64.split())
+        padding = len(img_b64) % 4
+        if padding:
+            img_b64 += "=" * (4 - padding)
+        try:
+            img_bytes = base64.b64decode(img_b64)
+        except binascii.Error as e:
+            raise HTTPException(status_code=400, detail=f"Base64 inválido para {img_type}: {e}")
+    
+    upload_url = f"http://{COMFYUI_SERVER}/upload/image"
+    files = {
+        "image": (f"{img_type}.png", BytesIO(img_bytes), "image/png")
+    }
+    data = {
+        "type": "input",
+        "overwrite": "true",
+        "subfolder": ""
+    }
+    resp = requests.post(upload_url, data=data, files=files)
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error subiendo {img_type}: {resp.status_code} – {resp.text}"
+        )
+    return resp.json()
+
+async def _queue_and_wait_for_completion(workflow: dict, number: int, save_image_node: str) -> dict:
+    try:
+        response = queue_prompt(workflow, number)
+        prompt_id = response["prompt_id"]
+    except Exception as e:
+        print(f"Error in queue_prompt: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
+
+    await wait_for_generation(prompt_id)
+    image_data = prepare_image_url(prompt_id, save_image_node)
+    return image_data
+
+async def _process_comfyui_generation(workflow: dict, number: int, save_image_node: str) -> dict:
+    try:
+        return await _queue_and_wait_for_completion(workflow, number, save_image_node)
+    except Exception as e:
+        print(f"Error during ComfyUI generation: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
+
+async def wait_for_generation(prompt_id: str):
+    while True:
+        try:
+            history = get_history(prompt_id)
+            if prompt_id in history:
+                break
+        except Exception as e:
+            print(f"Error getting history: {str(e)}")
+        await asyncio.sleep(1)
+
+async def get_prompt(request: Request) -> str:
+    data = await request.json()
+    if not data or "prompt" not in data:
+        raise HTTPException(status_code=400, detail="El campo 'prompt' es requerido")
+    prompt = data["prompt"]
+    return prompt
 
 class GenerationRequest(BaseModel):
     prompt: str
@@ -203,65 +296,20 @@ class ImageWithMaskRequest(BaseModel):
     image: str
     lora: str
 
-async def get_prompt(request: Request) -> str:
-    data = await request.json()
-    if not data or "prompt" not in data:
-        raise HTTPException(status_code=400, detail="El campo 'prompt' es requerido")
-    prompt = data["prompt"]
-    return prompt
-
-async def wait_for_generation(prompt_id: str):
-    while True:
-        try:
-            history = get_history(prompt_id)
-            if prompt_id in history:
-                break
-        except Exception as e:
-            print(f"Error getting history: {str(e)}")
-        await asyncio.sleep(1)
-
-def prepare_image_url(prompt_id: str, saveImageNode: str) -> dict:
-    history_data = get_history(prompt_id)
-    if prompt_id in history_data:
-        outputs = history_data[prompt_id]["outputs"]
-        if saveImageNode in outputs:  # ID del nodo SaveImage
-            images = outputs[saveImageNode]["images"]
-            if images:
-                image_data = images[0]
-                image_url = f"http://{COMFYUI_SERVER}/view?filename={image_data['filename']}&type={image_data['type']}&subfolder={image_data.get('subfolder', '')}"
-                print(f"Generated image URL: {image_url}")
-                return {"imageUrl": image_url}
-
-    raise HTTPException(status_code=500, detail="No se pudo obtener la imagen generada")
-
-def get_image(data):
-    with urllib.request.urlopen(data["imageUrl"]) as response:
-        return base64.b64encode(response.read())
-
 @app.post("/lorasuib/api/generate-simple")
 async def generate_simple_image(request: ImageRequest):
     try:
         seed = random.randint(0, 2**32 - 1) if request.seed == -1 else request.seed
-        cfg_val = request.cfg
-        steps_val = request.steps
-
-        workflow = create_default_workflow(request.prompt, seed, cfg=cfg_val, steps=steps_val, width=request.width, height=request.height)
+        workflow = create_default_workflow(request.prompt, seed, cfg=request.cfg, steps=request.steps, width=request.width, height=request.height)
 
         # Enviar a ComfyUI
         try:
-            response = queue_prompt(workflow, request.number)
-            prompt_id = response["prompt_id"]
+            image_data = await _process_comfyui_generation(workflow, request.number, "27")
         except Exception as e:
-            print(f"Error in queue_prompt: {str(e)}")
+            print(f"Error in _process_comfyui_generation: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
-
-        await wait_for_generation(prompt_id)
-        image_data = prepare_image_url(prompt_id, "27")
         
-        image = get_image(image_data)
-        image_data["image"] = image
-        image_data["seed"] = seed
-        return image_data
+        return prepare_response(image_data, seed)
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
@@ -271,71 +319,23 @@ async def generate_simple_image(request: ImageRequest):
 async def generate_mask_image(request: ImageWithMaskRequest):
     try:
         seed = request.seed if request.seed is not None else random.randint(0, 2**32 - 1)
-        workflow = create_lora_workflow(request.prompt, seed, cfg=request.cfg, steps=request.steps, width=request.width, height=request.height, lora=request.lora)
+
+        workflow = create_lora_workflow(request.prompt, seed, request.width, request.height, request.lora, request.cfg, request.steps)
 
         # Subir imagen y máscara a ComfyUI antes de enviar el workflow
         files_uploaded = []
         for img_type in ["image", "mask"]:
             img_b64: Optional[str] = getattr(request, img_type, None)
-            if img_b64:
-                if img_b64.startswith(("http://", "https://")):
-                    print("hola")
-                    # Descarga el recurso remoto como bytes
-                    resp = requests.get(img_b64, timeout=10)
-                    if resp.status_code != 200:
-                        raise HTTPException(
-                            status_code=502,
-                            detail=f"Error al descargar la URL para {img_type}: {resp.status_code}"
-                        )
-                    img_bytes = resp.content
-                else:
-                    # a) Limpia prefijo y padding
-                    img_b64 = img_b64.split(",", 1)[-1]  # si viniera con data:image/… se descarta
-                    img_b64 = "".join(img_b64.split())
-                    padding = len(img_b64) % 4
-                    if padding:
-                        img_b64 += "=" * (4 - padding)
-
-                    try:
-                        img_bytes = base64.b64decode(img_b64)
-                    except binascii.Error as e:
-                        raise HTTPException(status_code=400, detail=f"Base64 inválido para {img_type}: {e}")
-                
-                
-                # c) Prepara multipart/form-data
-                upload_url = f"http://{COMFYUI_SERVER}/upload/image"
-                files = {
-                    "image": (f"{img_type}.png", BytesIO(img_bytes), "image/png")
-                }
-                data = {
-                    "type": "input",
-                    "overwrite": "true",
-                    "subfolder": ""
-                }
-                # d) Llama a ComfyUI
-                resp = requests.post(upload_url, data=data, files=files)
-                if resp.status_code != 200:
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"Error subiendo {img_type}: {resp.status_code} – {resp.text}"
-                    )
-
-                files_uploaded.append(resp.json())
+            files_uploaded.append(await _upload_image_to_comfyui(img_b64, img_type))
 
         # Enviar a ComfyUI
         try:
-            response = queue_prompt(workflow, request.number)            
-            prompt_id = response["prompt_id"]
+            image_data = await _process_comfyui_generation(workflow, request.number, "22")
         except Exception as e:
-            print(f"Error in queue_prompt: {str(e)}")
+            print(f"Error in _process_comfyui_generation: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
 
-        await wait_for_generation(prompt_id)
-        image_data = prepare_image_url(prompt_id, "22")
-        image = get_image(image_data)
-        image_data["image"] = image
-        image_data["seed"] = seed
-        return image_data
+        return prepare_response(image_data, seed)
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
