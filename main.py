@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 import requests
 import json
 import os
-from typing import Optional
+from typing import Optional, Dict, Any, Union
 from pydantic import BaseModel
 import asyncio
 import random
@@ -23,6 +23,7 @@ import time
 from contextlib import asynccontextmanager
 from websockets.exceptions import ConnectionClosedOK
 import websockets
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 app = FastAPI(title="ComfyUI Image Generation API")
 
@@ -194,28 +195,39 @@ def prepare_response(image_data, seed):
     image_data["seed"] = seed
     return image_data
 
-async def _upload_image_to_comfyui(img_b64: Optional[str], img_type: str) -> dict:
-    if not img_b64:
-        return {}
+async def _upload_image_to_comfyui(img_data: Union[str, UploadFile], img_type: str) -> dict:
+    print(f"DEBUG: Type of img_data: {type(img_data)}")
+    print(f"DEBUG: img_data class: {img_data.__class__}")
+    print(f"DEBUG: img_data module: {img_data.__class__.__module__}")
+    print(f"DEBUG: UploadFile class from import: {UploadFile}")
+    print(f"DEBUG: UploadFile module from import: {UploadFile.__module__}")
+    print(f"DEBUG: isinstance(img_data, UploadFile): {isinstance(img_data, UploadFile)}")
 
-    if img_b64.startswith(("http://", "https://")):
-        resp = requests.get(img_b64, timeout=10)
-        if resp.status_code != 200:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Error al descargar la URL para {img_type}: {resp.status_code}"
-            )
-        img_bytes = resp.content
+    if isinstance(img_data, (UploadFile, StarletteUploadFile)):
+        img_bytes = await img_data.read()
+    elif isinstance(img_data, str):
+        if not img_data:
+            return {}
+        if img_data.startswith(("http://", "https://")):
+            resp = requests.get(img_data, timeout=10)
+            if resp.status_code != 200:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Error al descargar la URL para {img_type}: {resp.status_code}"
+                )
+            img_bytes = resp.content
+        else:
+            img_b64 = img_data.split(",", 1)[-1]
+            img_b64 = "".join(img_b64.split())
+            padding = len(img_b64) % 4
+            if padding:
+                img_b64 += "=" * (4 - padding)
+            try:
+                img_bytes = base64.b64decode(img_b64)
+            except binascii.Error as e:
+                raise HTTPException(status_code=400, detail=f"Base64 inválido para {img_type}: {e}")
     else:
-        img_b64 = img_b64.split(",", 1)[-1]
-        img_b64 = "".join(img_b64.split())
-        padding = len(img_b64) % 4
-        if padding:
-            img_b64 += "=" * (4 - padding)
-        try:
-            img_bytes = base64.b64decode(img_b64)
-        except binascii.Error as e:
-            raise HTTPException(status_code=400, detail=f"Base64 inválido para {img_type}: {e}")
+        raise HTTPException(status_code=400, detail=f"Tipo de imagen no soportado para {img_type}")
     
     upload_url = f"http://{COMFYUI_SERVER}/upload/image"
     files = {
@@ -289,17 +301,6 @@ class ImageRequest(BaseModel):
     steps: int = 25
     lora: str = ""
 
-class ImageWithMaskRequest(BaseModel):
-    prompt: str
-    width: int = 1024
-    height: int = 1024
-    seed: int = -1
-    cfg: float = 1.0
-    steps: int = 25
-    mask: str
-    image: str
-    lora: str
-
 @app.post("/lorasuib/api/generate-simple")
 async def generate_simple_image(request: ImageRequest):
     try:
@@ -322,17 +323,26 @@ async def generate_simple_image(request: ImageRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/lorasuib/api/generate-mask")
-async def generate_mask_image(request: ImageWithMaskRequest):
+async def generate_mask_image(
+    prompt: str = File(...),
+    width: int = File(1024),
+    height: int = File(1024),
+    seed: int = File(-1),
+    cfg: float = File(1.0),
+    steps: int = File(25),
+    lora: str = File(...),
+    image: UploadFile = File(...),
+    mask: UploadFile = File(...)
+):
     try:
-        seed = random.randint(0, 2**32 - 1) if request.seed == -1 else request.seed
+        seed = random.randint(0, 2**32 - 1) if seed == -1 else seed
 
-        workflow = create_lora_workflow(request.prompt, seed, request.width, request.height, request.lora, request.cfg, request.steps)
+        workflow = create_lora_workflow(prompt, seed, width, height, lora, cfg, steps)
 
         # Subir imagen y máscara a ComfyUI antes de enviar el workflow
         files_uploaded = []
-        for img_type in ["image", "mask"]:
-            img_b64: Optional[str] = getattr(request, img_type, None)
-            files_uploaded.append(await _upload_image_to_comfyui(img_b64, img_type))
+        files_uploaded.append(await _upload_image_to_comfyui(image, "image"))
+        files_uploaded.append(await _upload_image_to_comfyui(mask, "mask"))
 
         # Enviar a ComfyUI
         try:
@@ -350,17 +360,26 @@ async def generate_mask_image(request: ImageWithMaskRequest):
         raise HTTPException(status_code=500, detail=str(e))
     
 @app.post("/lorasuib/api/face-enhancer")
-async def generate_enhancer(request: ImageWithMaskRequest):
+async def generate_enhancer(
+    prompt: str = File(...),
+    width: int = File(1024),
+    height: int = File(1024),
+    seed: int = File(-1),
+    cfg: float = File(1.0),
+    steps: int = File(25),
+    lora: str = File(...),
+    image: UploadFile = File(...),
+    mask: UploadFile = File(...)
+):
     try:
-        seed = random.randint(0, 2**32 - 1) if request.seed == -1 else request.seed
+        seed = random.randint(0, 2**32 - 1) if seed == -1 else seed
 
-        workflow = create_face_workflow(request.prompt, seed, request.width, request.height, request.lora, request.cfg, request.steps)
+        workflow = create_face_workflow(prompt, seed, width, height, lora, cfg, steps)
 
         # Subir imagen y máscara a ComfyUI antes de enviar el workflow
         files_uploaded = []
-        for img_type in ["image", "mask"]:
-            img_b64: Optional[str] = getattr(request, img_type, None)
-            files_uploaded.append(await _upload_image_to_comfyui(img_b64, img_type))
+        files_uploaded.append(await _upload_image_to_comfyui(image, "image"))
+        files_uploaded.append(await _upload_image_to_comfyui(mask, "mask"))
 
         # Enviar a ComfyUI
         try:
