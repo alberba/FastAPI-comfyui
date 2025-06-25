@@ -16,19 +16,20 @@ import urllib.error
 import binascii
 from workflows.default_workflow import create_default_workflow
 from workflows.lora_workflow import create_lora_workflow
+from workflows.face_workflow import create_face_workflow
 import base64
 from io import BytesIO
 import time
 from contextlib import asynccontextmanager
 from websockets.exceptions import ConnectionClosedOK
-from websockets.client import connect
+import websockets
 
 app = FastAPI(title="ComfyUI Image Generation API")
 
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with your Astro app's domain
+    allow_origins=["http://localhost:4321", "*"],  # In production, replace with your Astro app's domain
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -49,13 +50,17 @@ comfyui_is_free = False # New global variable to track if ComfyUI is free
 def send_free_to_comfyui():
     """Sends a POST request to the /free endpoint on the ComfyUI server."""
     try:
-        response = requests.post(f"http://{COMFYUI_SERVER}/free")
+        payload = {
+            "unload_models": True,
+            "free_memory": True
+        }
+        response = requests.post(f"http://{COMFYUI_SERVER}/free", json=payload)
         response.raise_for_status()  # Raise an exception for HTTP errors (4xx or 5xx)
         print("Sent /free endpoint to ComfyUI successfully.")
     except requests.exceptions.RequestException as e:
         print(f"Error sending /free to ComfyUI: {e}")
 
-INACTIVITY_TIMEOUT = 20  # seconds
+INACTIVITY_TIMEOUT = 1800  # seconds
 CHECK_INTERVAL = 5 # seconds
 
 async def inactivity_monitor():
@@ -82,14 +87,14 @@ app = FastAPI(title="ComfyUI Image Generation API", lifespan=lifespan)
 async def activity_middleware(request: Request, call_next):
     global last_activity_time
     global comfyui_is_free # Declare global to modify it
+    print("Origin", request.headers.get("origin"))
     last_activity_time = time.time()
     comfyui_is_free = False # Reset to False on any activity
     response = await call_next(request)
     return response
 
-def queue_prompt(prompt, number):
+def queue_prompt(prompt):
     p = {"prompt": prompt}
-    p["number"] = number
     data = json.dumps(p).encode('utf-8')
     
     req = urllib.request.Request(
@@ -130,7 +135,7 @@ async def websocket_endpoint(websocket: WebSocket):
         
         # Conectar al WebSocket de ComfyUI
         comfyui_ws_url = f"ws://{COMFYUI_SERVER}/ws?clientId={client_id}"
-        async with connect(comfyui_ws_url) as comfyui_ws:
+        async with websockets.connect(comfyui_ws_url) as comfyui_ws:
             print(f"Conectado al WebSocket de ComfyUI")
             
             # Tarea para reenviar mensajes de ComfyUI al cliente
@@ -229,9 +234,9 @@ async def _upload_image_to_comfyui(img_b64: Optional[str], img_type: str) -> dic
         )
     return resp.json()
 
-async def _queue_and_wait_for_completion(workflow: dict, number: int, save_image_node: str) -> dict:
+async def _queue_and_wait_for_completion(workflow: dict, save_image_node: str) -> dict:
     try:
-        response = queue_prompt(workflow, number)
+        response = queue_prompt(workflow)
         prompt_id = response["prompt_id"]
     except Exception as e:
         print(f"Error in queue_prompt: {str(e)}")
@@ -241,9 +246,9 @@ async def _queue_and_wait_for_completion(workflow: dict, number: int, save_image
     image_data = prepare_image_url(prompt_id, save_image_node)
     return image_data
 
-async def _process_comfyui_generation(workflow: dict, number: int, save_image_node: str) -> dict:
+async def _process_comfyui_generation(workflow: dict, save_image_node: str) -> dict:
     try:
-        return await _queue_and_wait_for_completion(workflow, number, save_image_node)
+        return await _queue_and_wait_for_completion(workflow, save_image_node)
     except Exception as e:
         print(f"Error during ComfyUI generation: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
@@ -282,7 +287,7 @@ class ImageRequest(BaseModel):
     seed: int = -1
     cfg: float = 1.0
     steps: int = 25
-    number: int = 1
+    lora: str = ""
 
 class ImageWithMaskRequest(BaseModel):
     prompt: str
@@ -291,7 +296,6 @@ class ImageWithMaskRequest(BaseModel):
     seed: int = -1
     cfg: float = 1.0
     steps: int = 25
-    number: int = 1
     mask: str
     image: str
     lora: str
@@ -300,15 +304,17 @@ class ImageWithMaskRequest(BaseModel):
 async def generate_simple_image(request: ImageRequest):
     try:
         seed = random.randint(0, 2**32 - 1) if request.seed == -1 else request.seed
-        workflow = create_default_workflow(request.prompt, seed, cfg=request.cfg, steps=request.steps, width=request.width, height=request.height)
+        workflow = create_default_workflow(request.prompt, seed, cfg=request.cfg, steps=request.steps, lora=request.lora, width=request.width, height=request.height)
 
         # Enviar a ComfyUI
         try:
-            image_data = await _process_comfyui_generation(workflow, request.number, "27")
+            image_data = await _process_comfyui_generation(workflow, "27")
         except Exception as e:
             print(f"Error in _process_comfyui_generation: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
         
+        global last_activity_time
+        last_activity_time = time.time()
         return prepare_response(image_data, seed)
 
     except Exception as e:
@@ -318,7 +324,7 @@ async def generate_simple_image(request: ImageRequest):
 @app.post("/lorasuib/api/generate-mask")
 async def generate_mask_image(request: ImageWithMaskRequest):
     try:
-        seed = request.seed if request.seed is not None else random.randint(0, 2**32 - 1)
+        seed = random.randint(0, 2**32 - 1) if request.seed == -1 else request.seed
 
         workflow = create_lora_workflow(request.prompt, seed, request.width, request.height, request.lora, request.cfg, request.steps)
 
@@ -330,11 +336,41 @@ async def generate_mask_image(request: ImageWithMaskRequest):
 
         # Enviar a ComfyUI
         try:
-            image_data = await _process_comfyui_generation(workflow, request.number, "22")
+            image_data = await _process_comfyui_generation(workflow, "22")
         except Exception as e:
             print(f"Error in _process_comfyui_generation: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
 
+        global last_activity_time
+        last_activity_time = time.time()
+        return prepare_response(image_data, seed)
+
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.post("/lorasuib/api/face-enhancer")
+async def generate_enhancer(request: ImageWithMaskRequest):
+    try:
+        seed = random.randint(0, 2**32 - 1) if request.seed == -1 else request.seed
+
+        workflow = create_face_workflow(request.prompt, seed, request.width, request.height, request.lora, request.cfg, request.steps)
+
+        # Subir imagen y máscara a ComfyUI antes de enviar el workflow
+        files_uploaded = []
+        for img_type in ["image", "mask"]:
+            img_b64: Optional[str] = getattr(request, img_type, None)
+            files_uploaded.append(await _upload_image_to_comfyui(img_b64, img_type))
+
+        # Enviar a ComfyUI
+        try:
+            image_data = await _process_comfyui_generation(workflow, "60")
+        except Exception as e:
+            print(f"Error in _process_comfyui_generation: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
+
+        global last_activity_time
+        last_activity_time = time.time()
         return prepare_response(image_data, seed)
 
     except Exception as e:
@@ -350,6 +386,10 @@ async def get_loras():
         raise HTTPException(status_code=response.status_code, detail="Error al obtener los modelos LORA")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/ping")
+async def ping():
+    return {"pong": True}
 
 if __name__ == "__main__":
     import uvicorn

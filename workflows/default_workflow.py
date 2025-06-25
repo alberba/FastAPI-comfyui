@@ -1,4 +1,4 @@
-def create_default_workflow(prompt: str, random_seed: int, width: int, height: int, cfg: float = 1.0, steps: int = 25, ) -> dict:
+def create_default_workflow(prompt: str, random_seed: int, width: int, height: int, lora: str, cfg: float = 1.0, steps: int = 25, ) -> dict:
     """
     Crea un workflow simple para ComfyUI con la configuración por defecto.
     
@@ -18,9 +18,9 @@ def create_default_workflow(prompt: str, random_seed: int, width: int, height: i
                 "steps": steps,
                 "cfg": cfg,
                 "sampler_name": "euler",
-                "scheduler": "normal",
-                "denoise": 1,
-                "model": ["35", 0],
+                "scheduler": "beta",
+                "denoise": 1.00,
+                "model": ["36", 0],
                 "positive": ["29", 0],
                 "negative": ["20", 0],
                 "latent_image": ["6", 0]
@@ -94,10 +94,18 @@ def create_default_workflow(prompt: str, random_seed: int, width: int, height: i
         },
         "35": {
             "inputs": {
-                "lora_name": "aidmaImageUprader-FLUX-v0.3.safetensors",
-                "strength_model": 0.2,
+                "lora_name": "aidmaImageUprader-FLUX-v0.3.safetensors" if lora == "" else lora,
+                "strength_model": 0 if lora == "" else 1.0,
                 "model": ["15", 0]
             },
             "class_type": "LoraLoaderModelOnly"
-        }
+        },
+        "36": {
+            "inputs": {
+                "lora_name": "aidmaImageUprader-FLUX-v0.3.safetensors",
+                "strength_model": 0.2,
+                "model": ["35", 0]
+            },
+            "class_type": "LoraLoaderModelOnly"
+        },
     } 
