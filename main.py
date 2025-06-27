@@ -25,17 +25,6 @@ from websockets.exceptions import ConnectionClosedOK
 import websockets
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-app = FastAPI(title="ComfyUI Image Generation API")
-
-# Configure CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:4321", "*"],  # In production, replace with your Astro app's domain
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # ComfyUI server configuration
 COMFYUI_SERVER = "127.0.0.1:8188"
 UPLOAD_DIR = "uploads"
@@ -83,6 +72,15 @@ async def lifespan(app: FastAPI):
     print("Inactivity monitor shutting down.")
 
 app = FastAPI(title="ComfyUI Image Generation API", lifespan=lifespan)
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:4321", "*"],  # In production, replace with your Astro app's domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.middleware("http")
 async def activity_middleware(request: Request, call_next):
