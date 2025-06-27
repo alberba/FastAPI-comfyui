@@ -96,7 +96,7 @@ def create_lora_workflow(prompt: str, random_seed: int, width: int, height: int,
     },
     "10": {
         "inputs": {
-        "noise_mask": "true",
+        "noise_mask": True,
         "positive": [
             "9",
             0
@@ -260,11 +260,11 @@ def create_lora_workflow(prompt: str, random_seed: int, width: int, height: int,
     "42": {
         "inputs": {
         "image": "image.png",
-        "resize": "true",
+        "resize": True,
         "width": width,
         "height": height,
         "repeat": 1,
-        "keep_proportion": "false",
+        "keep_proportion": False,
         "divisible_by": 2,
         "mask_channel": "alpha",
         "background_color": ""
@@ -277,14 +277,14 @@ def create_lora_workflow(prompt: str, random_seed: int, width: int, height: int,
     "43": {
         "inputs": {
         "image": "mask.png",
-        "resize": "true",
+        "resize": True,
         "width": width,
         "height": height,
         "repeat": 1,
-        "keep_proportion": "false",
+        "keep_proportion": False,
         "divisible_by": 2,
         "mask_channel": "alpha",
-        "background_color": ""
+        "background_color": "#fff"
         },
         "class_type": "LoadAndResizeImage",
         "_meta": {

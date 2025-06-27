@@ -120,8 +120,27 @@ def queue_prompt(prompt):
 def get_history(prompt_id):
     with urllib.request.urlopen(f"http://{COMFYUI_SERVER}/history/{prompt_id}") as response:
         return json.loads(response.read())
+    
+async def forward_client_to_comfyui(client_ws: WebSocket, comfyui_ws):
+    try:
+        while True:
+            data = await client_ws.receive_text()
+            await comfyui_ws.send(data)
+    except ConnectionClosedOK:
+        pass
+    except Exception as e:
+        print(f"Error forwarding from client to ComfyUI: {str(e)}")
 
-@app.websocket("/lorasuib/ws/")
+async def forward_comfyui_to_client(comfyui_ws, client_ws: WebSocket):
+    try:
+        async for data in comfyui_ws:
+            await client_ws.send_text(data)
+    except ConnectionClosedOK:
+        pass
+    except Exception as e:
+        print(f"Error forwarding from ComfyUI to client: {str(e)}")
+
+@app.websocket("/lorasuib/api/ws/")
 async def websocket_endpoint(websocket: WebSocket):
     try:
         print("Nueva conexión WebSocket intentando conectarse...")
@@ -136,21 +155,11 @@ async def websocket_endpoint(websocket: WebSocket):
         comfyui_ws_url = f"ws://{COMFYUI_SERVER}/ws?clientId={client_id}"
         async with websockets.connect(comfyui_ws_url) as comfyui_ws:
             print(f"Conectado al WebSocket de ComfyUI")
-            
-            # Tarea para reenviar mensajes de ComfyUI al cliente
-            async def forward_messages(source_ws, destination_ws):
-                try:
-                    async for message in source_ws:
-                        await destination_ws.send(message)
-                except ConnectionClosedOK:
-                    pass
-                except Exception as e:
-                    print(f"Error reenviando mensajes: {str(e)}")
 
             # Ejecutar ambas tareas concurrentemente
             await asyncio.gather(
-                forward_messages(comfyui_ws, websocket),
-                forward_messages(websocket, comfyui_ws)
+                forward_client_to_comfyui(websocket, comfyui_ws),
+                forward_comfyui_to_client(comfyui_ws, websocket)
             )
             
     except Exception as e:

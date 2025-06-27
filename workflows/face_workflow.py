@@ -227,7 +227,7 @@ def create_face_workflow(prompt: str, random_seed: int, width: int, height: int,
       "keep_proportion": False,
       "divisible_by": 2,
       "mask_channel": "alpha",
-      "background_color": ""
+      "background_color": "#fff"
     },
     "class_type": "LoadAndResizeImage",
     "_meta": {
