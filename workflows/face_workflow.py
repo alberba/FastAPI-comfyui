@@ -250,8 +250,8 @@ def create_face_workflow(prompt: str, random_seed: int, width: int, height: int,
   },
   "20": {
     "inputs": {
-      "lora_name": lora,
-      "strength_model": 1.0000000000000002,
+      "lora_name": "aidmaImageUprader-FLUX-v0.3.safetensors" if lora == "" else lora,
+      "strength_model": 0.20 if lora == "" else 0.9500000000000002,
       "model": [
         "1",
         0

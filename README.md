@@ -1,6 +1,6 @@
 # ComfyUI API
 
-This API serves as a bridge between your ComfyUI workflow and a web interface built with Astro.
+This API serves as a bridge between your ComfyUI workflow and a web interface. An Example web interface is [Comfyui-web](https://github.com/alberba/comfyui-web)
 
 ## Prerequisites
 
@@ -27,36 +27,47 @@ The API will be available at `http://localhost:8000`
 ## API Endpoints
 
 - `GET /`: Health check endpoint
-- `POST /api/workflow`: Execute a ComfyUI workflow
-- `GET /api/history`: Get ComfyUI execution history
+- `POST /api/workflow`: Execute a ComfyUI workflow with a provided JSON workflow.
 
-## Example Usage
+### General Image Generation (with LoRA support)
 
-To execute a workflow:
+- `POST /lorasuib/api/generate-simple`: Generate an image with basic parameters, including optional LoRA application.
+  **Parameters (JSON Body):**
 
-```python
-import requests
+  - `prompt` (string, required): The text prompt for image generation.
+  - `width` (integer, optional, default: 1024): The desired width of the generated image.
+  - `height` (integer, optional, default: 1024): The desired height of the generated image.
+  - `seed` (integer, optional, default: -1): A seed for reproducible random generation. Use -1 for a random seed.
+  - `cfg` (float, optional, default: 1.0): Classifier Free Guidance value.
+  - `steps` (integer, optional, default: 25): Number of sampling steps.
+  - `lora` (string, optional, default: ""): The name of the LoRA model to use. If an empty string, no LoRA is applied.
 
-workflow = {
-    # Your ComfyUI workflow JSON here
-}
+- `POST /lorasuib/api/generate-mask`: Generate an image with an input image and mask, supporting LoRA application.
+  **Parameters (Form Data - `multipart/form-data`):**
+  - `prompt` (string, required): The text prompt for image generation.
+  - `width` (integer, required): The desired width of the generated image.
+  - `height` (integer, required): The desired height of the generated image.
+  - `seed` (integer, required): A seed for reproducible random generation.
+  - `cfg` (float, required): Classifier Free Guidance value.
+  - `steps` (integer, required): Number of sampling steps.
+  - `lora` (string, required): The name of the LoRA model to use.
+  - `image` (file, required): The input image file.
+  - `mask` (file, required): The input mask file.
 
-response = requests.post(
-    "http://localhost:8000/api/workflow",
-    json={"workflow": workflow}
-)
-print(response.json())
-```
+### Face Enhancer Workflow
 
-## CORS Configuration
+- `POST /lorasuib/api/face-enhancer`: Enhance a face in an image using a pre-defined ComfyUI workflow.
+  **Parameters (Form Data - `multipart/form-data`):**
+  - `prompt` (string, required): The text prompt for face enhancement.
+  - `width` (integer, optional, default: 1024): The desired width of the output image.
+  - `height` (integer, optional, default: 1024): The desired height of the output image.
+  - `seed` (integer, optional, default: -1): A seed for reproducible random generation.
+  - `cfg` (float, optional, default: 1.0): Classifier Free Guidance value.
+  - `steps` (integer, optional, default: 25): Number of sampling steps.
+  - `lora` (string, required): The name of the LoRA model to use for enhancement.
+  - `image` (file, required): The input image file containing the face to enhance.
+  - `mask` (file, required): The input mask file for the face region.
 
-The API is configured to accept requests from any origin (`*`). In production, you should update the `allow_origins` list in `main.py` to include only your Astro application's domain.
+### LoRA Model Information
 
-## Security Notes
-
-- This is a development setup. For production:
-  - Implement proper authentication
-  - Restrict CORS origins
-  - Use environment variables for configuration
-  - Add rate limiting
-  - Implement proper error handling
+- `GET /lorasuib/api/get-loras`: Get a list of available LoRA models.

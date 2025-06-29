@@ -169,15 +169,6 @@ async def websocket_endpoint(websocket: WebSocket):
         except:
             pass
 
-async def send_progress(client_id: str, message: dict):
-    if client_id in active_connections:
-        try:
-            await active_connections[client_id].send_json(message)
-        except Exception as e:
-            print(f"Error enviando mensaje a {client_id}: {str(e)}")
-            if client_id in active_connections:
-                del active_connections[client_id]
-
 def prepare_image_url(prompt_id: str, saveImageNode: str) -> dict:
     history_data = get_history(prompt_id)
     if prompt_id in history_data:
@@ -331,15 +322,15 @@ async def generate_simple_image(request: ImageRequest):
 
 @app.post("/lorasuib/api/generate-mask")
 async def generate_mask_image(
-    prompt: str = File(...),
-    width: int = File(1024),
-    height: int = File(1024),
-    seed: int = File(-1),
-    cfg: float = File(1.0),
-    steps: int = File(25),
-    lora: str = File(...),
-    image: UploadFile = File(...),
-    mask: UploadFile = File(...)
+    prompt: str = File(),
+    width: int = File(),
+    height: int = File(),
+    seed: int = File(),
+    cfg: float = File(),
+    steps: int = File(),
+    lora: str = File(),
+    image: UploadFile = File(),
+    mask: UploadFile = File()
 ):
     try:
         seed = random.randint(0, 2**32 - 1) if seed == -1 else seed
@@ -412,10 +403,6 @@ async def get_loras():
         raise HTTPException(status_code=response.status_code, detail="Error al obtener los modelos LORA")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
-@app.get("/ping")
-async def ping():
-    return {"pong": True}
 
 if __name__ == "__main__":
     import uvicorn
