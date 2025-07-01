@@ -24,6 +24,7 @@ from contextlib import asynccontextmanager
 from websockets.exceptions import ConnectionClosedOK
 import websockets
 from starlette.datastructures import UploadFile as StarletteUploadFile
+from PIL import Image
 
 # ComfyUI server configuration
 COMFYUI_SERVER = "127.0.0.1:8188"
@@ -219,9 +220,25 @@ async def _upload_image_to_comfyui(img_data: Union[str, UploadFile], img_type: s
                 img_bytes = base64.b64decode(img_b64)
             except binascii.Error as e:
                 raise HTTPException(status_code=400, detail=f"Base64 inválido para {img_type}: {e}")
-    else:
-        raise HTTPException(status_code=400, detail=f"Tipo de imagen no soportado para {img_type}")
     
+    # Resize image to specified width and height
+    try:
+        img_buffer = BytesIO(img_bytes)
+        img = Image.open(img_buffer)
+
+        
+        # Ajustar width y height para que sean divisibles entre 2
+        # El width será el tamaño actual de la imagen, ajustando solo el height para que sea divisible entre 2
+        new_width = img.width - (img.width % 2)
+        new_height = img.height - (img.height % 2)
+        resized_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        
+        output_buffer = BytesIO()
+        resized_img.save(output_buffer, format="PNG")
+        img_bytes = output_buffer.getvalue()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al procesar la imagen para {img_type}: {e}")
+
     upload_url = f"http://{COMFYUI_SERVER}/upload/image"
     files = {
         "image": (img_name, BytesIO(img_bytes), "image/png")
@@ -371,6 +388,8 @@ async def generate_enhancer(
     try:
         seed = random.randint(0, 2**32 - 1) if seed == -1 else seed
         global cambioworkflow
+        cambioworkflow = not cambioworkflow
+
         workflow = create_face_workflow(prompt, seed, width, height, lora, "imagen1.png" if cambioworkflow else "imagen2.png", "mask1.png" if cambioworkflow else "mask2.png", cfg, steps)
 
         # Subir imagen y máscara a ComfyUI antes de enviar el workflow
