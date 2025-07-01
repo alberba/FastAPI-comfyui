@@ -30,6 +30,8 @@ COMFYUI_SERVER = "127.0.0.1:8188"
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+cambioworkflow = False
+
 # Almacenar las conexiones WebSocket activas
 active_connections = {}
 
@@ -193,14 +195,7 @@ def prepare_response(image_data, seed):
     image_data["seed"] = seed
     return image_data
 
-async def _upload_image_to_comfyui(img_data: Union[str, UploadFile], img_type: str) -> dict:
-    print(f"DEBUG: Type of img_data: {type(img_data)}")
-    print(f"DEBUG: img_data class: {img_data.__class__}")
-    print(f"DEBUG: img_data module: {img_data.__class__.__module__}")
-    print(f"DEBUG: UploadFile class from import: {UploadFile}")
-    print(f"DEBUG: UploadFile module from import: {UploadFile.__module__}")
-    print(f"DEBUG: isinstance(img_data, UploadFile): {isinstance(img_data, UploadFile)}")
-
+async def _upload_image_to_comfyui(img_data: Union[str, UploadFile], img_type: str, img_name: str) -> dict:
     if isinstance(img_data, (UploadFile, StarletteUploadFile)):
         img_bytes = await img_data.read()
     elif isinstance(img_data, str):
@@ -229,7 +224,7 @@ async def _upload_image_to_comfyui(img_data: Union[str, UploadFile], img_type: s
     
     upload_url = f"http://{COMFYUI_SERVER}/upload/image"
     files = {
-        "image": (f"{img_type}.png", BytesIO(img_bytes), "image/png")
+        "image": (img_name, BytesIO(img_bytes), "image/png")
     }
     data = {
         "type": "input",
@@ -240,7 +235,7 @@ async def _upload_image_to_comfyui(img_data: Union[str, UploadFile], img_type: s
     if resp.status_code != 200:
         raise HTTPException(
             status_code=500,
-            detail=f"Error subiendo {img_type}: {resp.status_code} – {resp.text}"
+            detail=f"Error subiendo {img_type}: {resp.status_code} - {resp.text}"
         )
     return resp.json()
 
@@ -334,13 +329,17 @@ async def generate_mask_image(
 ):
     try:
         seed = random.randint(0, 2**32 - 1) if seed == -1 else seed
+        global cambioworkflow
+        cambioworkflow = not cambioworkflow
 
-        workflow = create_lora_workflow(prompt, seed, width, height, lora, cfg, steps)
+        workflow = create_lora_workflow(prompt, seed, width, height, lora, "imagen1.png" if cambioworkflow else "imagen2.png", "mask1.png" if cambioworkflow else "mask2.png", cfg, steps)
 
         # Subir imagen y máscara a ComfyUI antes de enviar el workflow
         files_uploaded = []
-        files_uploaded.append(await _upload_image_to_comfyui(image, "image"))
-        files_uploaded.append(await _upload_image_to_comfyui(mask, "mask"))
+        files_uploaded.append(await _upload_image_to_comfyui(image, "image", "imagen1.png" if cambioworkflow else "imagen2.png"))
+        files_uploaded.append(await _upload_image_to_comfyui(mask, "mask", "mask1.png" if cambioworkflow else "mask2.png"))
+
+        print(f"DEBUG: Uploaded files: {files_uploaded}")
 
         # Enviar a ComfyUI
         try:
@@ -371,13 +370,13 @@ async def generate_enhancer(
 ):
     try:
         seed = random.randint(0, 2**32 - 1) if seed == -1 else seed
-
-        workflow = create_face_workflow(prompt, seed, width, height, lora, cfg, steps)
+        global cambioworkflow
+        workflow = create_face_workflow(prompt, seed, width, height, lora, "imagen1.png" if cambioworkflow else "imagen2.png", "mask1.png" if cambioworkflow else "mask2.png", cfg, steps)
 
         # Subir imagen y máscara a ComfyUI antes de enviar el workflow
         files_uploaded = []
-        files_uploaded.append(await _upload_image_to_comfyui(image, "image"))
-        files_uploaded.append(await _upload_image_to_comfyui(mask, "mask"))
+        files_uploaded.append(await _upload_image_to_comfyui(image, "image", "imagen1.png" if cambioworkflow else "imagen2.png"))
+        files_uploaded.append(await _upload_image_to_comfyui(mask, "mask", "mask1.png" if cambioworkflow else "mask2.png"))
 
         # Enviar a ComfyUI
         try:

@@ -1,4 +1,4 @@
-def create_lora_workflow(prompt: str, random_seed: int, width: int, height: int, lora: str, cfg: float = 1.0, steps: int = 20) -> dict:
+def create_lora_workflow(prompt: str, random_seed: int, width: int, height: int, lora: str, img_name: str, mask_name: str, cfg: float = 1.0, steps: int = 20) -> dict:
     """
     Crea un workflow simple para ComfyUI con la configuración por defecto.
     
@@ -259,7 +259,7 @@ def create_lora_workflow(prompt: str, random_seed: int, width: int, height: int,
     },
     "42": {
         "inputs": {
-        "image": "image.png",
+        "image": img_name,
         "resize": True,
         "width": width,
         "height": height,
@@ -276,19 +276,19 @@ def create_lora_workflow(prompt: str, random_seed: int, width: int, height: int,
     },
     "43": {
         "inputs": {
-        "image": "mask.png",
-        "resize": True,
-        "width": width,
-        "height": height,
-        "repeat": 1,
-        "keep_proportion": False,
-        "divisible_by": 2,
-        "mask_channel": "alpha",
-        "background_color": "#fff"
+            "image": mask_name,
+            "resize": True,
+            "width": width,
+            "height": height,
+            "repeat": 1,
+            "keep_proportion": False,
+            "divisible_by": 2,
+            "mask_channel": "alpha",
+            "background_color": "#fff"
         },
         "class_type": "LoadAndResizeImage",
         "_meta": {
-        "title": "Load & Resize Image"
-        }
+            "title": "Load & Resize Image"
+        },
     }
     }
