@@ -322,13 +322,13 @@ async def generate_simple_image(request: ImageRequest):
 
 @app.post("/lorasuib/api/generate-mask")
 async def generate_mask_image(
-    prompt: str = File(),
-    width: int = File(),
-    height: int = File(),
-    seed: int = File(),
-    cfg: float = File(),
-    steps: int = File(),
-    lora: str = File(),
+    prompt: str = Form(...),
+    width: int = Form(...),
+    height: int = Form(...),
+    seed: int = Form(...),
+    cfg: float = Form(...),
+    steps: int = Form(...),
+    lora: str = Form(""),
     image: UploadFile = File(),
     mask: UploadFile = File()
 ):
