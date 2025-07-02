@@ -151,7 +151,7 @@ async def websocket_endpoint(websocket: WebSocket):
         print("Conexión WebSocket aceptada")
         
         # Generar un ID único para esta conexión
-        client_id = str(uuid.uuid4())
+        client_id = websocket.query_params.get("clientId", str(uuid.uuid4()))
         print(f"Conexión WebSocket establecida con ID: {client_id}")
         
         # Conectar al WebSocket de ComfyUI
