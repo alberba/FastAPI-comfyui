@@ -382,15 +382,26 @@ async def generate_enhancer(
     cfg: float = File(1.0),
     steps: int = File(25),
     lora: str = File(...),
+    maskWidth: str = File(512),
+    maskHeight: str = File(512),
     image: UploadFile = File(...),
-    mask: UploadFile = File(...)
+    mask: UploadFile = File(...),
 ):
     try:
         seed = random.randint(0, 2**32 - 1) if seed == -1 else seed
         global cambioworkflow
         cambioworkflow = not cambioworkflow
+        maskmax = max(int(maskWidth), int(maskHeight))
+        extend_factor = 3.0
+        if maskmax < 1024:
+            upscaler = 1024 / (maskmax * extend_factor)
+            if upscaler > 4.0:
+                upscaler = 4.0
+            elif upscaler < 1.0:
+                upscaler = 1.0
+        
 
-        workflow = create_face_workflow(prompt, seed, width, height, lora, "imagen1.png" if cambioworkflow else "imagen2.png", "mask1.png" if cambioworkflow else "mask2.png", cfg, steps)
+        workflow = create_face_workflow(prompt, seed, width, height, lora, upscaler, extend_factor, "imagen1.png" if cambioworkflow else "imagen2.png", "mask1.png" if cambioworkflow else "mask2.png", cfg, steps)
 
         # Subir imagen y máscara a ComfyUI antes de enviar el workflow
         files_uploaded = []
