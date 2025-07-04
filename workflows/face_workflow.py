@@ -1,4 +1,4 @@
-def create_face_workflow(prompt: str, random_seed: int, width: int, height: int, lora: str, upscaler: float, extend_factor: float, img_name: str, mask_name: str, cfg: float = 1.0, steps: int = 20) -> dict:
+def create_face_workflow(prompt: str, random_seed: int, width: int, height: int, denoise: float, lora: str, upscaler: float, extend_factor: float, img_name: str, mask_name: str, cfg: float = 1.0, steps: int = 20) -> dict:
     """
     Crea un workflow simple para ComfyUI con la configuración por defecto.
     
@@ -189,7 +189,7 @@ def create_face_workflow(prompt: str, random_seed: int, width: int, height: int,
     "inputs": {
       "scheduler": "simple",
       "steps": steps,
-      "denoise": 0.9000000000000001,
+      "denoise": denoise,
       "model": [
         "20",
         0

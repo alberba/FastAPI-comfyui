@@ -1,4 +1,4 @@
-def create_default_workflow(prompt: str, random_seed: int, width: int, height: int, lora: str, cfg: float = 1.0, steps: int = 25, ) -> dict:
+def create_default_workflow(prompt: str, random_seed: int, width: int, height: int, lora: str, cfg: float = 1.0, steps: int = 25, denoise: float = 0.95) -> dict:
     """
     Crea un workflow simple para ComfyUI con la configuración por defecto.
     
@@ -19,7 +19,7 @@ def create_default_workflow(prompt: str, random_seed: int, width: int, height: i
                 "cfg": cfg,
                 "sampler_name": "euler",
                 "scheduler": "beta",
-                "denoise": 1.00,
+                "denoise": denoise,
                 "model": ["36", 0],
                 "positive": ["29", 0],
                 "negative": ["20", 0],

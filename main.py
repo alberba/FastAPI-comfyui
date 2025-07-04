@@ -309,13 +309,14 @@ class ImageRequest(BaseModel):
     seed: int = -1
     cfg: float = 1.0
     steps: int = 25
+    denoise: float = 1.00
     lora: str = ""
 
 @app.post("/lorasuib/api/generate-simple")
 async def generate_simple_image(request: ImageRequest):
     try:
         seed = random.randint(0, 2**32 - 1) if request.seed == -1 else request.seed
-        workflow = create_default_workflow(request.prompt, seed, cfg=request.cfg, steps=request.steps, lora=request.lora, width=request.width, height=request.height)
+        workflow = create_default_workflow(request.prompt, seed, cfg=request.cfg, steps=request.steps, lora=request.lora, width=request.width, height=request.height, denoise=request.denoise)
 
         # Enviar a ComfyUI
         try:
@@ -340,6 +341,7 @@ async def generate_mask_image(
     seed: int = Form(...),
     cfg: float = Form(...),
     steps: int = Form(...),
+    denoise: float = Form(0.9),
     lora: str = Form(""),
     image: UploadFile = File(),
     mask: UploadFile = File()
@@ -349,7 +351,7 @@ async def generate_mask_image(
         global cambioworkflow
         cambioworkflow = not cambioworkflow
 
-        workflow = create_lora_workflow(prompt, seed, width, height, lora, "imagen1.png" if cambioworkflow else "imagen2.png", "mask1.png" if cambioworkflow else "mask2.png", cfg, steps)
+        workflow = create_lora_workflow(prompt, seed, width, height, denoise, lora, "imagen1.png" if cambioworkflow else "imagen2.png", "mask1.png" if cambioworkflow else "mask2.png", cfg, steps)
 
         # Subir imagen y máscara a ComfyUI antes de enviar el workflow
         files_uploaded = []
@@ -381,6 +383,7 @@ async def generate_enhancer(
     seed: int = File(-1),
     cfg: float = File(1.0),
     steps: int = File(25),
+    denoise: float = Form(0.9),
     lora: str = File(...),
     maskWidth: str = File(512),
     maskHeight: str = File(512),
@@ -401,7 +404,7 @@ async def generate_enhancer(
                 upscaler = 1.0
         
 
-        workflow = create_face_workflow(prompt, seed, width, height, lora, upscaler, extend_factor, "imagen1.png" if cambioworkflow else "imagen2.png", "mask1.png" if cambioworkflow else "mask2.png", cfg, steps)
+        workflow = create_face_workflow(prompt, seed, width, height, denoise, lora, upscaler, extend_factor, "imagen1.png" if cambioworkflow else "imagen2.png", "mask1.png" if cambioworkflow else "mask2.png", cfg, steps)
 
         # Subir imagen y máscara a ComfyUI antes de enviar el workflow
         files_uploaded = []
