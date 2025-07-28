@@ -23,7 +23,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Form, WebSocket, R
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from utils import define_seed, get_actual_time
+from utils import define_seed, get_actual_time, get_image_bytes_from_url, is_data_url, remove_b64_header
 from workflows.default_workflow import create_default_workflow
 from workflows.lora_workflow import create_lora_workflow
 from workflows.face_workflow import create_face_workflow
@@ -165,6 +165,14 @@ def toggle_cambioworkflow():
     global cambioworkflow
     cambioworkflow = not cambioworkflow
 
+def reset_activity_timer():
+    global last_activity_time
+    last_activity_time = get_actual_time()
+
+def fetch_image_as_base64(data):
+    with urllib.request.urlopen(data["imageUrl"]) as response:
+        return base64.b64encode(response.read())
+    
 def get_upscaler_and_extend_factor(maskSize: tuple[str, str]) -> tuple:
     maskWidth, maskHeight = maskSize
     maskmax = max(int(maskWidth), int(maskHeight))
@@ -177,17 +185,50 @@ def get_upscaler_and_extend_factor(maskSize: tuple[str, str]) -> tuple:
             upscaler_factor = 1.0
     return upscaler_factor, extend_factor
 
-def reset_activity_timer():
-    """
-    Resets the last activity time to the current time.
-    This is used to prevent the inactivity monitor from triggering.
-    """
-    global last_activity_time
-    last_activity_time = get_actual_time()
-
 def get_history(prompt_id):
     with urllib.request.urlopen(f"http://{COMFYUI_SERVER}/history/{prompt_id}") as response:
         return json.loads(response.read())
+    
+def optimize_image_for_processing(img_bytes: bytes, img_type: str):
+    # Resize image to specified width and height
+    try:
+        img = Image.open(BytesIO(img_bytes))
+        
+        # Ajustar width y height para que sean divisibles entre 2
+        # El width será el tamaño actual de la imagen, ajustando solo el height para que sea divisible entre 2
+        new_width = img.width - (img.width % 2)
+        new_height = img.height - (img.height % 2)
+        resized_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        
+        output_buffer = BytesIO()
+        resized_img.save(output_buffer, format="PNG")
+        img_bytes = output_buffer.getvalue()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al procesar la imagen para {img_type}: {e}")
+    
+    return img_bytes
+
+async def prepare_img_bytes(img_data: Union[str, UploadFile], img_type) -> bytes:
+    if isinstance(img_data, (UploadFile, StarletteUploadFile)):
+        # 
+        img_bytes = await img_data.read()
+    elif isinstance(img_data, str):
+        if not img_data:
+            return b""
+        if is_data_url(img_data):
+            img_bytes = get_image_bytes_from_url(img_data)
+        else:
+            img_b64 = remove_b64_header(img_data)
+            
+            try:
+                img_bytes = base64.b64decode(img_b64)
+            except binascii.Error as e:
+                raise HTTPException(status_code=400, detail=f"Base64 inválido para {img_type}: {e}")
+    
+    img_bytes = optimize_image_for_processing(img_bytes, img_type)
+    
+    return img_bytes
+    
 
 def queue_prompt(prompt):
     p = {"prompt": prompt}
@@ -250,61 +291,18 @@ async def _queue_and_wait_for_completion(workflow: dict, save_image_node: str) -
     image_data = prepare_image_url(prompt_id, save_image_node)
     return image_data
 
-def fetch_image_as_base64(data):
-    with urllib.request.urlopen(data["imageUrl"]) as response:
-        return base64.b64encode(response.read())
-
 async def _process_comfyui_generation(workflow: dict, save_image_node: str, seed: int) -> dict:
     try:
         image_data = await _queue_and_wait_for_completion(workflow, save_image_node)
         reset_activity_timer()
-        return prepare_response(image_data, seed)
+        return prepare_api_response(image_data, seed)
     except Exception as e:
         print(f"Error during ComfyUI generation: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
     
 async def _upload_image_to_comfyui(img_data: Union[str, UploadFile], img_type: str, img_name: str) -> dict:
-    if isinstance(img_data, (UploadFile, StarletteUploadFile)):
-        img_bytes = await img_data.read()
-    elif isinstance(img_data, str):
-        if not img_data:
-            return {}
-        if img_data.startswith(("http://", "https://")):
-            resp = requests.get(img_data, timeout=10)
-            if resp.status_code != 200:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Error al descargar la URL para {img_type}: {resp.status_code}"
-                )
-            img_bytes = resp.content
-        else:
-            img_b64 = img_data.split(",", 1)[-1]
-            img_b64 = "".join(img_b64.split())
-            padding = len(img_b64) % 4
-            if padding:
-                img_b64 += "=" * (4 - padding)
-            try:
-                img_bytes = base64.b64decode(img_b64)
-            except binascii.Error as e:
-                raise HTTPException(status_code=400, detail=f"Base64 inválido para {img_type}: {e}")
     
-    # Resize image to specified width and height
-    try:
-        img_buffer = BytesIO(img_bytes)
-        img = Image.open(img_buffer)
-
-        
-        # Ajustar width y height para que sean divisibles entre 2
-        # El width será el tamaño actual de la imagen, ajustando solo el height para que sea divisible entre 2
-        new_width = img.width - (img.width % 2)
-        new_height = img.height - (img.height % 2)
-        resized_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        
-        output_buffer = BytesIO()
-        resized_img.save(output_buffer, format="PNG")
-        img_bytes = output_buffer.getvalue()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al procesar la imagen para {img_type}: {e}")
+    img_bytes = await prepare_img_bytes(img_data, img_type)
 
     upload_url = f"http://{COMFYUI_SERVER}/upload/image"
     files = {
@@ -329,7 +327,7 @@ async def send_files_to_comfyui(image: UploadFile, mask: UploadFile, cambioworkf
     files_uploaded.append(await _upload_image_to_comfyui(mask, "mask", "mask1.png" if cambioworkflow else "mask2.png"))
     return files_uploaded
 
-def prepare_response(image_data, seed):
+def prepare_api_response(image_data, seed):
     image = fetch_image_as_base64(image_data)
     image_data["image"] = image
     image_data["seed"] = seed
