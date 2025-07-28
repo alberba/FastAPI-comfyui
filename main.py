@@ -1,3 +1,4 @@
+from turtle import reset
 import requests
 import json
 import asyncio
@@ -22,6 +23,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Form, WebSocket, R
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from utils import define_seed, get_actual_time
 from workflows.default_workflow import create_default_workflow
 from workflows.lora_workflow import create_lora_workflow
 from workflows.face_workflow import create_face_workflow
@@ -159,6 +161,30 @@ class ImageRequest(BaseModel):
     denoise: float = 1.00
     lora: str = ""
 
+def toggle_cambioworkflow():
+    global cambioworkflow
+    cambioworkflow = not cambioworkflow
+
+def get_upscaler_and_extend_factor(maskSize: tuple[str, str]) -> tuple:
+    maskWidth, maskHeight = maskSize
+    maskmax = max(int(maskWidth), int(maskHeight))
+    extend_factor = 2.0
+    if maskmax < 1024:
+        upscaler_factor = 1024 / (maskmax * extend_factor)
+        if upscaler_factor > 4.0:
+            upscaler_factor = 4.0
+        elif upscaler_factor < 1.0:
+            upscaler_factor = 1.0
+    return upscaler_factor, extend_factor
+
+def reset_activity_timer():
+    """
+    Resets the last activity time to the current time.
+    This is used to prevent the inactivity monitor from triggering.
+    """
+    global last_activity_time
+    last_activity_time = get_actual_time()
+
 def get_history(prompt_id):
     with urllib.request.urlopen(f"http://{COMFYUI_SERVER}/history/{prompt_id}") as response:
         return json.loads(response.read())
@@ -228,9 +254,11 @@ def fetch_image_as_base64(data):
     with urllib.request.urlopen(data["imageUrl"]) as response:
         return base64.b64encode(response.read())
 
-async def _process_comfyui_generation(workflow: dict, save_image_node: str) -> dict:
+async def _process_comfyui_generation(workflow: dict, save_image_node: str, seed: int) -> dict:
     try:
-        return await _queue_and_wait_for_completion(workflow, save_image_node)
+        image_data = await _queue_and_wait_for_completion(workflow, save_image_node)
+        reset_activity_timer()
+        return prepare_response(image_data, seed)
     except Exception as e:
         print(f"Error during ComfyUI generation: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
@@ -295,6 +323,12 @@ async def _upload_image_to_comfyui(img_data: Union[str, UploadFile], img_type: s
         )
     return resp.json()
 
+async def send_files_to_comfyui(image: UploadFile, mask: UploadFile, cambioworkflow: bool) -> list:
+    files_uploaded = []
+    files_uploaded.append(await _upload_image_to_comfyui(image, "image", "imagen1.png" if cambioworkflow else "imagen2.png"))
+    files_uploaded.append(await _upload_image_to_comfyui(mask, "mask", "mask1.png" if cambioworkflow else "mask2.png"))
+    return files_uploaded
+
 def prepare_response(image_data, seed):
     image = fetch_image_as_base64(image_data)
     image_data["image"] = image
@@ -304,19 +338,10 @@ def prepare_response(image_data, seed):
 @app.post("/lorasuib/api/generate-simple")
 async def generate_simple_image(request: ImageRequest):
     try:
-        seed = random.randint(0, 2**32 - 1) if request.seed == -1 else request.seed
+        seed = define_seed(request.seed)
         workflow = create_default_workflow(request.prompt, seed, cfg=request.cfg, steps=request.steps, lora=request.lora, width=request.width, height=request.height, denoise=request.denoise)
 
-        # Enviar a ComfyUI
-        try:
-            image_data = await _process_comfyui_generation(workflow, "27")
-        except Exception as e:
-            print(f"Error in _process_comfyui_generation: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
-        
-        global last_activity_time
-        last_activity_time = time.time()
-        return prepare_response(image_data, seed)
+        return await _process_comfyui_generation(workflow, "27", seed)
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
@@ -336,29 +361,14 @@ async def generate_mask_image(
     mask: UploadFile = File()
 ):
     try:
-        seed = random.randint(0, 2**32 - 1) if seed == -1 else seed
-        global cambioworkflow
-        cambioworkflow = not cambioworkflow
+        seed = define_seed(seed)
+        toggle_cambioworkflow()
 
         workflow = create_lora_workflow(prompt, seed, width, height, denoise, lora, "imagen1.png" if cambioworkflow else "imagen2.png", "mask1.png" if cambioworkflow else "mask2.png", cfg, steps)
 
-        # Subir imagen y máscara a ComfyUI antes de enviar el workflow
-        files_uploaded = []
-        files_uploaded.append(await _upload_image_to_comfyui(image, "image", "imagen1.png" if cambioworkflow else "imagen2.png"))
-        files_uploaded.append(await _upload_image_to_comfyui(mask, "mask", "mask1.png" if cambioworkflow else "mask2.png"))
+        await send_files_to_comfyui(image, mask, cambioworkflow)
 
-        print(f"DEBUG: Uploaded files: {files_uploaded}")
-
-        # Enviar a ComfyUI
-        try:
-            image_data = await _process_comfyui_generation(workflow, "22")
-        except Exception as e:
-            print(f"Error in _process_comfyui_generation: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
-
-        global last_activity_time
-        last_activity_time = time.time()
-        return prepare_response(image_data, seed)
+        return await _process_comfyui_generation(workflow, "22", seed)
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
@@ -380,36 +390,17 @@ async def generate_enhancer(
     mask: UploadFile = File(...),
 ):
     try:
-        seed = random.randint(0, 2**32 - 1) if seed == -1 else seed
-        global cambioworkflow
-        cambioworkflow = not cambioworkflow
-        maskmax = max(int(maskWidth), int(maskHeight))
-        extend_factor = 2.0
-        if maskmax < 1024:
-            upscaler = 1024 / (maskmax * extend_factor)
-            if upscaler > 4.0:
-                upscaler = 4.0
-            elif upscaler < 1.0:
-                upscaler = 1.0
+        seed = define_seed(seed)
+        toggle_cambioworkflow()
+
+        upscaler_factor, extend_factor = get_upscaler_and_extend_factor((maskWidth, maskHeight))
         
 
-        workflow = create_face_workflow(prompt, seed, width, height, denoise, lora, upscaler, extend_factor, "imagen1.png" if cambioworkflow else "imagen2.png", "mask1.png" if cambioworkflow else "mask2.png", cfg, steps)
+        workflow = create_face_workflow(prompt, seed, width, height, denoise, lora, upscaler_factor, extend_factor, "imagen1.png" if cambioworkflow else "imagen2.png", "mask1.png" if cambioworkflow else "mask2.png", cfg, steps)
 
-        # Subir imagen y máscara a ComfyUI antes de enviar el workflow
-        files_uploaded = []
-        files_uploaded.append(await _upload_image_to_comfyui(image, "image", "imagen1.png" if cambioworkflow else "imagen2.png"))
-        files_uploaded.append(await _upload_image_to_comfyui(mask, "mask", "mask1.png" if cambioworkflow else "mask2.png"))
+        await send_files_to_comfyui(image, mask, cambioworkflow)
 
-        # Enviar a ComfyUI
-        try:
-            image_data = await _process_comfyui_generation(workflow, "60")
-        except Exception as e:
-            print(f"Error in _process_comfyui_generation: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
-
-        global last_activity_time
-        last_activity_time = time.time()
-        return prepare_response(image_data, seed)
+        return await _process_comfyui_generation(workflow, "60", seed)
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
