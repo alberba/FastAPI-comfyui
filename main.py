@@ -1,41 +1,40 @@
-from ast import Str
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, WebSocket, Request, Query
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 import requests
 import json
-import os
-from typing import Optional, Dict, Any, Union
-from pydantic import BaseModel
 import asyncio
 import random
 import uuid
 import urllib.request
-import urllib.parse
 import urllib.error
 import binascii
-from workflows.default_workflow import create_default_workflow
-from workflows.lora_workflow import create_lora_workflow
-from workflows.face_workflow import create_face_workflow
 import base64
 from io import BytesIO
 import time
+import websockets
+
 from contextlib import asynccontextmanager
 from websockets.exceptions import ConnectionClosedOK
-import websockets
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from PIL import Image
+from typing import Optional, Dict, Any, Union
+from pydantic import BaseModel
+from ast import Str
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, WebSocket, Request, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+
+from workflows.default_workflow import create_default_workflow
+from workflows.lora_workflow import create_lora_workflow
+from workflows.face_workflow import create_face_workflow
+
 
 # ComfyUI server configuration
 COMFYUI_SERVER = "127.0.0.1:8188"
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+INACTIVITY_TIMEOUT = 1800  # seconds
+CHECK_INTERVAL = 5 # seconds
 
 cambioworkflow = False
-
 # Almacenar las conexiones WebSocket activas
 active_connections = {}
-
 # Global variable to track the last activity time
 last_activity_time = time.time()
 comfyui_is_free = False # New global variable to track if ComfyUI is free
@@ -52,9 +51,6 @@ def send_free_to_comfyui():
         print("Sent /free endpoint to ComfyUI successfully.")
     except requests.exceptions.RequestException as e:
         print(f"Error sending /free to ComfyUI: {e}")
-
-INACTIVITY_TIMEOUT = 1800  # seconds
-CHECK_INTERVAL = 5 # seconds
 
 async def inactivity_monitor():
     global comfyui_is_free
@@ -94,35 +90,6 @@ async def activity_middleware(request: Request, call_next):
     comfyui_is_free = False # Reset to False on any activity
     response = await call_next(request)
     return response
-
-def queue_prompt(prompt):
-    p = {"prompt": prompt}
-    data = json.dumps(p).encode('utf-8')
-    
-    req = urllib.request.Request(
-        f"http://{COMFYUI_SERVER}/prompt",
-        data=data,
-        headers={
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        }
-    )
-    try:
-        with urllib.request.urlopen(req) as response:
-            response_data = response.read()
-            return json.loads(response_data)
-    except urllib.error.HTTPError as e:
-        print(f"HTTP Error: {e.code} - {e.reason}")
-        error_body = e.read().decode()
-        print(f"Error response: {error_body}")
-        raise HTTPException(status_code=500, detail=f"Error al comunicarse con ComfyUI: {error_body}")
-    except Exception as e:
-        print(f"Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error inesperado: {str(e)}")
-    
-def get_history(prompt_id):
-    with urllib.request.urlopen(f"http://{COMFYUI_SERVER}/history/{prompt_id}") as response:
-        return json.loads(response.read())
     
 async def forward_client_to_comfyui(client_ws: WebSocket, comfyui_ws):
     try:
@@ -172,6 +139,65 @@ async def websocket_endpoint(websocket: WebSocket):
         except:
             pass
 
+class GenerationRequest(BaseModel):
+    prompt: str
+    negative_prompt: Optional[str] = ""
+    seed: Optional[int] = None
+    steps: Optional[int] = 20
+    cfg: Optional[float] = 7.0
+
+class SimpleGenerationRequest(BaseModel):
+    prompt: str
+
+class ImageRequest(BaseModel):
+    prompt: str
+    width: int = 1024
+    height: int = 1024
+    seed: int = -1
+    cfg: float = 1.0
+    steps: int = 25
+    denoise: float = 1.00
+    lora: str = ""
+
+def get_history(prompt_id):
+    with urllib.request.urlopen(f"http://{COMFYUI_SERVER}/history/{prompt_id}") as response:
+        return json.loads(response.read())
+
+def queue_prompt(prompt):
+    p = {"prompt": prompt}
+    data = json.dumps(p).encode('utf-8')
+    
+    req = urllib.request.Request(
+        f"http://{COMFYUI_SERVER}/prompt",
+        data=data,
+        headers={
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
+    )
+    try:
+        with urllib.request.urlopen(req) as response:
+            response_data = response.read()
+            return json.loads(response_data)
+    except urllib.error.HTTPError as e:
+        print(f"HTTP Error: {e.code} - {e.reason}")
+        error_body = e.read().decode()
+        print(f"Error response: {error_body}")
+        raise HTTPException(status_code=500, detail=f"Error al comunicarse con ComfyUI: {error_body}")
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error inesperado: {str(e)}")
+
+async def wait_for_generation(prompt_id: str):
+    while True:
+        try:
+            history = get_history(prompt_id)
+            if prompt_id in history:
+                break
+        except Exception as e:
+            print(f"Error getting history: {str(e)}")
+        await asyncio.sleep(1)
+
 def prepare_image_url(prompt_id: str, saveImageNode: str) -> dict:
     history_data = get_history(prompt_id)
     if prompt_id in history_data:
@@ -186,16 +212,29 @@ def prepare_image_url(prompt_id: str, saveImageNode: str) -> dict:
 
     raise HTTPException(status_code=500, detail="No se pudo obtener la imagen generada")
 
+async def _queue_and_wait_for_completion(workflow: dict, save_image_node: str) -> dict:
+    try:
+        response = queue_prompt(workflow)
+        prompt_id = response["prompt_id"]
+    except Exception as e:
+        print(f"Error in queue_prompt: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
+
+    await wait_for_generation(prompt_id)
+    image_data = prepare_image_url(prompt_id, save_image_node)
+    return image_data
+
 def fetch_image_as_base64(data):
     with urllib.request.urlopen(data["imageUrl"]) as response:
         return base64.b64encode(response.read())
 
-def prepare_response(image_data, seed):
-    image = fetch_image_as_base64(image_data)
-    image_data["image"] = image
-    image_data["seed"] = seed
-    return image_data
-
+async def _process_comfyui_generation(workflow: dict, save_image_node: str) -> dict:
+    try:
+        return await _queue_and_wait_for_completion(workflow, save_image_node)
+    except Exception as e:
+        print(f"Error during ComfyUI generation: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
+    
 async def _upload_image_to_comfyui(img_data: Union[str, UploadFile], img_type: str, img_name: str) -> dict:
     if isinstance(img_data, (UploadFile, StarletteUploadFile)):
         img_bytes = await img_data.read()
@@ -256,61 +295,11 @@ async def _upload_image_to_comfyui(img_data: Union[str, UploadFile], img_type: s
         )
     return resp.json()
 
-async def _queue_and_wait_for_completion(workflow: dict, save_image_node: str) -> dict:
-    try:
-        response = queue_prompt(workflow)
-        prompt_id = response["prompt_id"]
-    except Exception as e:
-        print(f"Error in queue_prompt: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
-
-    await wait_for_generation(prompt_id)
-    image_data = prepare_image_url(prompt_id, save_image_node)
+def prepare_response(image_data, seed):
+    image = fetch_image_as_base64(image_data)
+    image_data["image"] = image
+    image_data["seed"] = seed
     return image_data
-
-async def _process_comfyui_generation(workflow: dict, save_image_node: str) -> dict:
-    try:
-        return await _queue_and_wait_for_completion(workflow, save_image_node)
-    except Exception as e:
-        print(f"Error during ComfyUI generation: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
-
-async def wait_for_generation(prompt_id: str):
-    while True:
-        try:
-            history = get_history(prompt_id)
-            if prompt_id in history:
-                break
-        except Exception as e:
-            print(f"Error getting history: {str(e)}")
-        await asyncio.sleep(1)
-
-async def get_prompt(request: Request) -> str:
-    data = await request.json()
-    if not data or "prompt" not in data:
-        raise HTTPException(status_code=400, detail="El campo 'prompt' es requerido")
-    prompt = data["prompt"]
-    return prompt
-
-class GenerationRequest(BaseModel):
-    prompt: str
-    negative_prompt: Optional[str] = ""
-    seed: Optional[int] = None
-    steps: Optional[int] = 20
-    cfg: Optional[float] = 7.0
-
-class SimpleGenerationRequest(BaseModel):
-    prompt: str
-
-class ImageRequest(BaseModel):
-    prompt: str
-    width: int = 1024
-    height: int = 1024
-    seed: int = -1
-    cfg: float = 1.0
-    steps: int = 25
-    denoise: float = 1.00
-    lora: str = ""
 
 @app.post("/lorasuib/api/generate-simple")
 async def generate_simple_image(request: ImageRequest):
@@ -395,7 +384,7 @@ async def generate_enhancer(
         global cambioworkflow
         cambioworkflow = not cambioworkflow
         maskmax = max(int(maskWidth), int(maskHeight))
-        extend_factor = 3.0
+        extend_factor = 2.0
         if maskmax < 1024:
             upscaler = 1024 / (maskmax * extend_factor)
             if upscaler > 4.0:
