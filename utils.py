@@ -1,5 +1,8 @@
 import random
 import time
+import asyncio
+
+from comfyui import ComfyUIClient
 
 def define_seed(seed):
     """
@@ -43,3 +46,29 @@ def remove_b64_header(data):
             img_b64 += "=" * (4 - padding)
         return img_b64
     return data
+
+class InactivityMonitor:
+    """
+    A simple inactivity monitor that tracks the last activity time
+    """
+    def __init__(self, comfyUiClient: ComfyUIClient, timeout=60, check_interval=5):
+        """
+        Initialize the inactivity monitor with a specified timeout.
+        """
+        self.timeout = timeout
+        self.last_activity = time.time()
+        self.check_interval = check_interval
+        self.comfyUiClient = comfyUiClient
+        self.last_activity_time = time.time()
+
+    def reset(self):
+        """
+        Reset the last activity timestamp to the current time.
+        """
+        self.last_activity = time.time()
+    
+    async def inactivity_monitor(self):
+        while True:
+            await asyncio.sleep(self.check_interval)
+            if (time.time() - self.last_activity_time) > self.timeout and not self.comfyUiClient.get_is_free():
+                self.comfyUiClient.send_free()
