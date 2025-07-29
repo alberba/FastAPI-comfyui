@@ -8,15 +8,13 @@ from io import BytesIO
 import websockets
 
 from contextlib import asynccontextmanager
-from websockets.exceptions import ConnectionClosedOK
-from starlette.datastructures import UploadFile as StarletteUploadFile
 from PIL import Image
-from typing import Optional, Union
+from typing import Union
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, WebSocket, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from utils import InactivityMonitor, define_seed, get_actual_time, get_image_bytes_from_url, is_data_url, remove_b64_header
+from utils import InactivityMonitor, define_seed, get_image_bytes_from_url, is_data_url, remove_b64_header
 from comfyui import ComfyUIClient
 from workflows.default_workflow import create_default_workflow
 from workflows.lora_workflow import create_lora_workflow
@@ -29,20 +27,16 @@ INACTIVITY_TIMEOUT = 1800  # seconds
 CHECK_INTERVAL = 5 # seconds
 
 cambioworkflow = False
-# Almacenar las conexiones WebSocket activas
-active_connections = {}
-comfyui_is_free = False # New global variable to track if ComfyUI is free
 comfyUiClient = ComfyUIClient(f"http://{COMFYUI_SERVER}")
 
 inactivity_monitor = InactivityMonitor(timeout=INACTIVITY_TIMEOUT, check_interval=CHECK_INTERVAL, comfyUiClient=comfyUiClient)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    print("Starting inactivity monitor...")
+
     asyncio.create_task(inactivity_monitor.inactivity_monitor())
     yield
-    # Shutdown (if needed, though not for this specific task)
+
     print("Inactivity monitor shutting down.")
 
 app = FastAPI(title="ComfyUI Image Generation API", lifespan=lifespan)
@@ -62,47 +56,22 @@ async def activity_middleware(request: Request, call_next):
     comfyUiClient.set_non_free()
     response = await call_next(request)
     return response
-    
-async def forward_client_to_comfyui(client_ws: WebSocket, comfyui_ws):
-    try:
-        while True:
-            data = await client_ws.receive_text()
-            await comfyui_ws.send(data)
-    except ConnectionClosedOK:
-        pass
-    except Exception as e:
-        print(f"Error forwarding from client to ComfyUI: {str(e)}")
-
-async def forward_comfyui_to_client(comfyui_ws, client_ws: WebSocket):
-    try:
-        async for data in comfyui_ws:
-            await client_ws.send_text(data)
-    except ConnectionClosedOK:
-        pass
-    except Exception as e:
-        print(f"Error forwarding from ComfyUI to client: {str(e)}")
 
 @app.websocket("/lorasuib/api/ws/")
 async def websocket_endpoint(websocket: WebSocket):
     try:
-        print("Nueva conexión WebSocket intentando conectarse...")
         await websocket.accept()
-        print("Conexión WebSocket aceptada")
         
         # Generar un ID único para esta conexión
         client_id = websocket.query_params.get("clientId", str(uuid.uuid4()))
-        print(f"Conexión WebSocket establecida con ID: {client_id}")
         
-        # Conectar al WebSocket de ComfyUI
         comfyui_ws_url = f"ws://{COMFYUI_SERVER}/ws?clientId={client_id}"
         async with websockets.connect(comfyui_ws_url) as comfyui_ws:
-            print(f"Conectado al WebSocket de ComfyUI")
-
-            # Ejecutar ambas tareas concurrentemente
-            await asyncio.gather(
-                forward_client_to_comfyui(websocket, comfyui_ws),
-                forward_comfyui_to_client(comfyui_ws, websocket)
-            )
+            try:
+                async for data in comfyui_ws:
+                    await websocket.send_text(data.decode("utf-8") if isinstance(data, bytes) else str(data))
+            except:
+                pass
             
     except Exception as e:
         print(f"Error en la conexión WebSocket: {str(e)}")
@@ -110,16 +79,6 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.close()
         except:
             pass
-
-class GenerationRequest(BaseModel):
-    prompt: str
-    negative_prompt: Optional[str] = ""
-    seed: Optional[int] = None
-    steps: Optional[int] = 20
-    cfg: Optional[float] = 7.0
-
-class SimpleGenerationRequest(BaseModel):
-    prompt: str
 
 class ImageRequest(BaseModel):
     prompt: str
@@ -171,7 +130,7 @@ def optimize_image_for_processing(img_bytes: bytes, img_type: str):
     return img_bytes
 
 async def prepare_img_bytes(img_data: Union[str, UploadFile], img_type) -> bytes:
-    if isinstance(img_data, (UploadFile, StarletteUploadFile)):
+    if isinstance(img_data, UploadFile):
         # 
         img_bytes = await img_data.read()
     elif isinstance(img_data, str):

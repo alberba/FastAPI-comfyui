@@ -12,12 +12,6 @@ def define_seed(seed):
     """
     return random.randint(0, 2**32 - 1) if seed == -1 else seed
 
-def get_actual_time():
-    """
-    Get the current time in seconds since the epoch.
-    """
-    return time.time()
-
 def is_data_url(data):
     """
     Check if the provided data is a valid URL
