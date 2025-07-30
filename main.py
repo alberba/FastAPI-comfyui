@@ -90,6 +90,14 @@ class ImageRequest(BaseModel):
     denoise: float = 1.00
     lora: str = ""
 
+class MaskRequest(ImageRequest):
+    image_b64: str
+    mask_b64: str
+
+class MaskEnhancerRequest(MaskRequest):
+    maskWidth: int
+    maskHeight: int
+
 def toggle_cambioworkflow():
     global cambioworkflow
     cambioworkflow = not cambioworkflow
@@ -98,7 +106,7 @@ def fetch_image_as_base64(data):
     with urllib.request.urlopen(data["imageUrl"]) as response:
         return base64.b64encode(response.read())
     
-def get_upscaler_and_extend_factor(maskSize: tuple[str, str]) -> tuple:
+def get_upscaler_and_extend_factor(maskSize: tuple[int, int]) -> tuple:
     maskWidth, maskHeight = maskSize
     maskmax = max(int(maskWidth), int(maskHeight))
     extend_factor = 2.0
@@ -129,22 +137,18 @@ def optimize_image_for_processing(img_bytes: bytes, img_type: str):
     
     return img_bytes
 
-async def prepare_img_bytes(img_data: Union[str, UploadFile], img_type) -> bytes:
-    if isinstance(img_data, UploadFile):
-        # 
-        img_bytes = await img_data.read()
-    elif isinstance(img_data, str):
-        if not img_data:
-            return b""
-        if is_data_url(img_data):
-            img_bytes = get_image_bytes_from_url(img_data)
-        else:
-            img_b64 = remove_b64_header(img_data)
-            
-            try:
-                img_bytes = base64.b64decode(img_b64)
-            except binascii.Error as e:
-                raise HTTPException(status_code=400, detail=f"Base64 inválido para {img_type}: {e}")
+async def prepare_img_bytes(img_data: str, img_type: str) -> bytes:
+    if not img_data:
+        return b""
+    if is_data_url(img_data):
+        img_bytes = get_image_bytes_from_url(img_data)
+    else:
+        img_b64 = remove_b64_header(img_data)
+        
+        try:
+            img_bytes = base64.b64decode(img_b64)
+        except binascii.Error as e:
+            raise HTTPException(status_code=400, detail=f"Base64 inválido para {img_type}: {e}")
     
     img_bytes = optimize_image_for_processing(img_bytes, img_type)
     
@@ -194,13 +198,12 @@ async def _process_comfyui_generation(workflow: dict, save_image_node: str, seed
         print(f"Error during ComfyUI generation: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error al enviar a ComfyUI: {str(e)}")
     
-async def _upload_image_to_comfyui(img_data: Union[str, UploadFile], img_type: str, img_name: str) -> dict:
-    
+async def _upload_image_to_comfyui(img_data: str, img_type: str, img_name: str) -> dict:
     img_bytes = await prepare_img_bytes(img_data, img_type)
 
-    return comfyUiClient.post_image(img_name, img_bytes, img_type)  
+    return comfyUiClient.post_image(img_name, img_bytes, img_type)
 
-async def send_files_to_comfyui(image: UploadFile, mask: UploadFile, cambioworkflow: bool) -> list:
+async def send_files_to_comfyui(image: str, mask: str, cambioworkflow: bool) -> list:
     results = []
     results.append(await _upload_image_to_comfyui(image, "image", "imagen1.png" if cambioworkflow else "imagen2.png"))
     results.append(await _upload_image_to_comfyui(mask, "mask", "mask1.png" if cambioworkflow else "mask2.png"))
@@ -213,10 +216,10 @@ def prepare_api_response(image_data, seed):
     return image_data
 
 @app.post("/lorasuib/api/generate-simple")
-async def generate_simple_image(request: ImageRequest):
+async def generate_simple_image(req: ImageRequest):
     try:
-        seed = define_seed(request.seed)
-        workflow = create_default_workflow(request.prompt, seed, cfg=request.cfg, steps=request.steps, lora=request.lora, width=request.width, height=request.height, denoise=request.denoise)
+        seed = define_seed(req.seed)
+        workflow = create_default_workflow(req.prompt, seed, cfg=req.cfg, steps=req.steps, lora=req.lora, width=req.width, height=req.height, denoise=req.denoise)
 
         return await _process_comfyui_generation(workflow, "27", seed)
 
@@ -225,25 +228,14 @@ async def generate_simple_image(request: ImageRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/lorasuib/api/generate-mask")
-async def generate_mask_image(
-    prompt: str = Form(...),
-    width: int = Form(...),
-    height: int = Form(...),
-    seed: int = Form(...),
-    cfg: float = Form(...),
-    steps: int = Form(...),
-    denoise: float = Form(0.9),
-    lora: str = Form(""),
-    image: UploadFile = File(),
-    mask: UploadFile = File()
-):
+async def generate_mask_image(req: MaskRequest):
     try:
-        seed = define_seed(seed)
+        seed = define_seed(req.seed)
         toggle_cambioworkflow()
 
-        workflow = create_lora_workflow(prompt, seed, width, height, denoise, lora, "imagen1.png" if cambioworkflow else "imagen2.png", "mask1.png" if cambioworkflow else "mask2.png", cfg, steps)
+        workflow = create_lora_workflow(req.prompt, seed, req.width, req.height, req.denoise, req.lora, "imagen1.png" if cambioworkflow else "imagen2.png", "mask1.png" if cambioworkflow else "mask2.png", req.cfg, req.steps)
 
-        await send_files_to_comfyui(image, mask, cambioworkflow)
+        await send_files_to_comfyui(req.image_b64, req.mask_b64, cambioworkflow)
 
         return await _process_comfyui_generation(workflow, "22", seed)
 
@@ -252,30 +244,17 @@ async def generate_mask_image(
         raise HTTPException(status_code=500, detail=str(e))
     
 @app.post("/lorasuib/api/face-enhancer")
-async def generate_enhancer(
-    prompt: str = File(...),
-    width: int = File(1024),
-    height: int = File(1024),
-    seed: int = File(-1),
-    cfg: float = File(1.0),
-    steps: int = File(25),
-    denoise: float = Form(0.9),
-    lora: str = File(...),
-    maskWidth: str = File(512),
-    maskHeight: str = File(512),
-    image: UploadFile = File(...),
-    mask: UploadFile = File(...),
-):
+async def generate_enhancer(req: MaskEnhancerRequest):
     try:
-        seed = define_seed(seed)
+        seed = define_seed(req.seed)
         toggle_cambioworkflow()
 
-        upscaler_factor, extend_factor = get_upscaler_and_extend_factor((maskWidth, maskHeight))
+        upscaler_factor, extend_factor = get_upscaler_and_extend_factor((req.maskWidth, req.maskHeight))
         
 
-        workflow = create_face_workflow(prompt, seed, width, height, denoise, lora, upscaler_factor, extend_factor, "imagen1.png" if cambioworkflow else "imagen2.png", "mask1.png" if cambioworkflow else "mask2.png", cfg, steps)
+        workflow = create_face_workflow(req.prompt, seed, req.width, req.height, req.denoise, req.lora, upscaler_factor, extend_factor, "imagen1.png" if cambioworkflow else "imagen2.png", "mask1.png" if cambioworkflow else "mask2.png", req.cfg, req.steps)
 
-        await send_files_to_comfyui(image, mask, cambioworkflow)
+        await send_files_to_comfyui(req.image_b64, req.mask_b64, cambioworkflow)
 
         return await _process_comfyui_generation(workflow, "60", seed)
 
