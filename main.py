@@ -69,9 +69,9 @@ async def websocket_endpoint(websocket: WebSocket):
         async with websockets.connect(comfyui_ws_url) as comfyui_ws:
             try:
                 async for data in comfyui_ws:
-                    await websocket.send_text(data.decode("utf-8") if isinstance(data, bytes) else str(data))
-            except:
-                pass
+                    await websocket.send_text(data) # type: ignore
+            except Exception as e:
+                print(f"Error forwarding from ComfyUI to client: {str(e)}")
             
     except Exception as e:
         print(f"Error en la conexión WebSocket: {str(e)}")
