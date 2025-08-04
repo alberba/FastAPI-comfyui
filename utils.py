@@ -15,25 +15,30 @@ def define_seed(seed):
     """
     return random.randint(0, 2**32 - 1) if seed == -1 else seed
 
+
 def is_data_url(data):
     """
     Check if the provided data is a valid URL
     """
     return data.startswith(("http://", "https://"))
 
+
 def get_image_bytes_from_url(url):
     """
     Fetch image bytes from a URL.
     """
     import requests
+
     resp = requests.get(url, timeout=10)
     if resp.status_code != 200:
         raise ValueError(f"Failed to fetch image from {url}")
     return resp.content
 
+
 def fetch_image_as_base64(data):
     with urllib.request.urlopen(data["imageUrl"]) as response:
         return base64.b64encode(response.read())
+
 
 def remove_b64_header(data):
     """
@@ -48,10 +53,12 @@ def remove_b64_header(data):
         return img_b64
     return data
 
+
 class InactivityMonitor:
     """
     A simple inactivity monitor that tracks the last activity time
     """
+
     def __init__(self, comfyUiClient: ComfyUIClient, timeout=60, check_interval=5):
         """
         Initialize the inactivity monitor with a specified timeout.
@@ -67,9 +74,11 @@ class InactivityMonitor:
         Reset the last activity timestamp to the current time.
         """
         self.last_activity = time.time()
-    
+
     async def inactivity_monitor(self):
         while True:
             await asyncio.sleep(self.check_interval)
-            if (time.time() - self.last_activity_time) > self.timeout and not self.comfyUiClient.get_is_free():
+            if (
+                time.time() - self.last_activity_time
+            ) > self.timeout and not self.comfyUiClient.get_is_free():
                 self.comfyUiClient.send_free()
