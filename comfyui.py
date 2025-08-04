@@ -1,8 +1,9 @@
-import requests
 import json
-import urllib.request
 import urllib.error
+import urllib.request
 from io import BytesIO
+
+import requests
 from fastapi import HTTPException
 
 

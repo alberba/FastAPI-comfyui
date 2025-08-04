@@ -1,25 +1,23 @@
-import requests
 import asyncio
-import uuid
-import urllib.request
-import binascii
 import base64
-from io import BytesIO
-import websockets
-
+import binascii
+import uuid
 from contextlib import asynccontextmanager
-from PIL import Image
-from typing import Union
-from pydantic import BaseModel
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, WebSocket, Request
+from io import BytesIO
+
+import requests
+import websockets
+from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from PIL import Image
+from pydantic import BaseModel
 
-from utils import InactivityMonitor, define_seed, get_image_bytes_from_url, is_data_url, remove_b64_header
 from comfyui import ComfyUIClient
+from utils import (InactivityMonitor, define_seed, fetch_image_as_base64,
+                   get_image_bytes_from_url, is_data_url, remove_b64_header)
 from workflows.default_workflow import create_default_workflow
-from workflows.lora_workflow import create_lora_workflow
 from workflows.face_workflow import create_face_workflow
-
+from workflows.lora_workflow import create_lora_workflow
 
 # ComfyUI server configuration
 COMFYUI_SERVER = "127.0.0.1:8188"

@@ -1,8 +1,11 @@
+import asyncio
+import base64
 import random
 import time
-import asyncio
+import urllib.request
 
 from comfyui import ComfyUIClient
+
 
 def define_seed(seed):
     """
@@ -27,6 +30,10 @@ def get_image_bytes_from_url(url):
     if resp.status_code != 200:
         raise ValueError(f"Failed to fetch image from {url}")
     return resp.content
+
+def fetch_image_as_base64(data):
+    with urllib.request.urlopen(data["imageUrl"]) as response:
+        return base64.b64encode(response.read())
 
 def remove_b64_header(data):
     """
