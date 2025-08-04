@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from io import BytesIO
 
 import requests
-import websockets
+from websockets.client import connect
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
@@ -71,25 +71,23 @@ async def activity_middleware(request: Request, call_next):
 
 
 @app.websocket("/lorasuib/api/ws/")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket_browser: WebSocket):
     try:
-        await websocket.accept()
+        await websocket_browser.accept()
 
         # Generar un ID único para esta conexión
-        client_id = websocket.query_params.get("clientId", str(uuid.uuid4()))
+        client_id = websocket_browser.query_params.get("clientId", str(uuid.uuid4()))
 
         comfyui_ws_url = f"ws://{COMFYUI_SERVER}/ws?clientId={client_id}"
-        async with websockets.connect(comfyui_ws_url) as comfyui_ws:
-            try:
-                async for data in comfyui_ws:
-                    await websocket.send_text(data)  # type: ignore
-            except Exception as e:
-                print(f"Error forwarding from ComfyUI to client: {str(e)}")
+        async with connect(comfyui_ws_url) as comfyui_ws:
+            async for data in comfyui_ws:
+                # Enviar los datos recibidos desde ComfyUI al navegador
+                await websocket_browser.send_text(str(data))
 
     except Exception as e:
         print(f"Error en la conexión WebSocket: {str(e)}")
         try:
-            await websocket.close()
+            await websocket_browser.close()
         except:
             pass
 
