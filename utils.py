@@ -64,7 +64,6 @@ class InactivityMonitor:
         Initialize the inactivity monitor with a specified timeout.
         """
         self.timeout = timeout
-        self.last_activity = time.time()
         self.check_interval = check_interval
         self.comfyUiClient = comfyUiClient
         self.last_activity_time = time.time()
@@ -73,7 +72,7 @@ class InactivityMonitor:
         """
         Reset the last activity timestamp to the current time.
         """
-        self.last_activity = time.time()
+        self.last_activity_time = time.time()
 
     async def inactivity_monitor(self):
         while True:
