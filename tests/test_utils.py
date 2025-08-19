@@ -1,5 +1,5 @@
 import pytest
-from utils import (
+from src.app.utils import (
     define_seed,
     fetch_image_as_base64,
     get_image_bytes_from_url,

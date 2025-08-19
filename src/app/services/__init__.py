@@ -1,0 +1,1 @@
+"""Módulo encargado de albergar la lógica de la aplicación"""
